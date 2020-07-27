@@ -66,6 +66,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 
 [[package]]
+name = "byteorder"
+version = "1.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
+
+[[package]]
 name = "bytes"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -119,6 +125,57 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
+]
+
+[[package]]
+name = "cpp"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68bd679e3b11fc72f93b851f8f72b227deb004613fa637ea700a1ef348aecf1f"
+dependencies = [
+ "cpp_macros",
+]
+
+[[package]]
+name = "cpp_build"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6afdf675ccc9cc6aff408febf02e08584b6b948178624b4da5cc562a78273d3f"
+dependencies = [
+ "cc",
+ "cpp_common",
+ "lazy_static",
+ "proc-macro2",
+ "regex",
+ "syn",
+ "unicode-xid",
+]
+
+[[package]]
+name = "cpp_common"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7145e26dfba4419500ae901a641b7486fb84ee365967f26f5d8c1069ececa9bf"
+dependencies = [
+ "lazy_static",
+ "proc-macro2",
+ "syn",
+]
+
+[[package]]
+name = "cpp_macros"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b14cbed7d9b15f03be8d38438595d2547df5001e2a22b7e59812a3fade09e4"
+dependencies = [
+ "aho-corasick",
+ "byteorder",
+ "cpp_common",
+ "if_rust_version",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -285,9 +342,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "if_rust_version"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46dbcb333e86939721589d25a3557e180b52778cb33c7fdfe9e0158ff790d5ec"
+
+[[package]]
 name = "iganalyzer-rust"
 version = "0.1.0"
 dependencies = [
+ "cpp",
+ "cpp_build",
  "flatbuffers",
  "futures",
  "futures-channel",
