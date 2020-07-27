@@ -44,7 +44,7 @@ fn main() {
             "C" => {
                 let comment_ptr = value.as_ptr();
                 let size = value.len();
-                let s = CString::new("hello").unwrap();
+                let s = CString::new("").unwrap();
                 let mut t: u64 = 0;
                 let r = unsafe {
                     let mut rs = s.into_raw();
