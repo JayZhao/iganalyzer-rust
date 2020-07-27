@@ -21,13 +21,15 @@ cpp!{{
     constexpr size_t flags = yas::binary | yas::mem | yas::no_header;
 }}
 
+const PATH: &str = "/Users/huangdezhou/fpserver.rocksdb";
+
 fn main() {
-    let db = rocksdb_client::open_db("/Users/huangdezhou/fpserver.rocksdb");
+    let db = rocksdb_client::open_db(PATH);
     let iter = db.iterator(IteratorMode::Start); 
     for (key, value) in iter {
-        // let r = db.get(&key).unwrap().unwrap();
+        let value = db.get(&key).unwrap().unwrap();
         let skey = String::from_utf8_lossy(&key);
-        //println!("Saw {:?}", skey);
+        println!("Saw {:?}", skey);
 
         match &skey[0..1] {
             "A" => {
@@ -36,16 +38,17 @@ fn main() {
             },
             "M" => {
                 let media = get_root::<FBMedia>(&value);
-                // println!("Media ID: {:?}", media.id());
-                // println!("Media Code: {:?}", media.mediaCode())
+                println!("Media ID: {:?}", media.id());
+                println!("Media Code: {:?}", media.mediaCode())
             },
             "C" => {
                 let comment_ptr = value.as_ptr();
                 let size = value.len();
                 let s = CString::new("hello").unwrap();
+                let mut t: u64 = 0;
                 let r = unsafe {
                     let mut rs = s.into_raw();
-                    let r = cpp!([comment_ptr as "const char *", size as "size_t", mut rs as "char*"] -> *mut c_char as "char*" {
+                    let r = cpp!([comment_ptr as "const char *", size as "size_t", mut rs as "char*", mut t as "uint64_t"] -> *mut c_char as "char*" {
                         std::tuple<uint64_t, std::string> tmp;
                         yas::load<flags>(
                             yas::intrusive_buffer{
@@ -53,15 +56,17 @@ fn main() {
                                 size
                             },
                         tmp);
-                        std::cout << std::get<1>(tmp).c_str() << std::endl;
-                                     auto ss = std::get<1>(tmp);
-                                     rs = strdup(ss.c_str());
-                        return rs;
-                        });
-                            CString::from_raw(r).into_string()
-                    };
+                        auto ss = std::get<1>(tmp);
+                        rs = strdup(ss.c_str());
+                        t = std::get<0>(tmp);
 
-                         println!("{:?}", r);
+                        return rs;
+                    });
+                    CString::from_raw(r).into_string()
+                };
+
+                println!("Comment: {:?}", r.unwrap());
+                println!("Comment Time: {:?}", t);
 
             },
             _ => {
