@@ -1,7 +1,7 @@
 use flatbuffers::{get_root, FlatBufferBuilder};
 use rocksdb::{DB, SliceTransform, DBCompressionType, Options, DBCompactionStyle, MergeOperands};
 use crate::task_generated::fp::{FBAccount, FBMedia,  FBAccountArgs, FBMediaArgs, FBURLVersion, FBURLVersionArgs};
-
+use crate::account;
     
 static BUFFER_SIZE: usize = 1024 * 1024;
 
@@ -56,42 +56,10 @@ fn concat_merge(new_key: &[u8],
                         Ok(new_key) => {
                             match &new_key[0..1] {
                                 "A" => {
-                                    let old_account = get_root::<FBAccount>(existing_val);
+                                    let mut old_account = get_root::<FBAccount>(existing_val);
                                     for op in operands {
                                         let new_account = get_root::<FBAccount>(op);
-
-                                        if old_account.countTime() == 0 {
-                                            if old_account.username() != new_account.username() ||
-                                                old_account.fullName() != new_account.fullName() ||
-                                                old_account.avatarURLString() != new_account.avatarURLString() ||
-                                                old_account.isPrivate() != new_account.isPrivate()
-                                            {
-                                                let builder = &mut builder;
-                                                let username = Some(builder.create_string(new_account.username().unwrap()));
-                                                let fullName = Some(builder.create_string(new_account.fullName().unwrap()));
-                                                let avatarURLString = Some(builder.create_string(new_account.avatarURLString().unwrap()));
-                                                let account = FBAccount::create(builder,
-                                                                  &FBAccountArgs {
-                                                                      id: old_account.id(),
-                                                                      username,
-                                                                      fullName,
-                                                                      avatarURLString,
-                                                                      isPrivate: new_account.isPrivate(),
-                                                                      mediaCount: old_account.mediaCount(),
-                                                                      followingCount: old_account.followingCount(),
-                                                                      followerCount: old_account.followerCount(),
-                                                                      countTime: old_account.countTime()
-                                                                  }
-                                                );
-                                                builder.finish(account, None);
-                                                let buf = builder.finished_data();
-                                                return Some(buf.to_vec());
-                                            }
-
-                                        } else if new_account.countTime() <= old_account.countTime() {
-
-                                            return Some((*existing_val).to_vec())
-                                        }
+                                        account::merge_fbaccount(&mut builder, new_account, old_account);
                                     }
                                 },
                                 "M" => {

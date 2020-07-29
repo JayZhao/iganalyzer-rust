@@ -3,6 +3,8 @@ mod followers_plus;
 mod task_generated;
 #[allow(dead_code, unused_imports, non_snake_case)]
 mod rocksdb_client;
+
+mod account;
 use flatbuffers::get_root;
 use task_generated::fp::{FBAccount, FBMedia, FBComment};
 use rocksdb::IteratorMode;
@@ -10,7 +12,6 @@ use cpp::cpp;
 use std::ffi::CString;
 
 use std::os::raw::c_char;
-
 
 cpp!{{
     #include <iostream>
