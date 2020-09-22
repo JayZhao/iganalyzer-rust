@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use chrono::Utc;
 use rand::{Rng, thread_rng};
 use base64;
+use bytes::Bytes;
 
+#[derive(Debug)]
 pub struct Failure {
     retry_count: i32,
     failed_at: String,
@@ -12,29 +14,37 @@ pub struct Failure {
     backtrace: Vec<String>
 }
 
-pub struct Job<A, C> {
-    jid: String,
+#[derive(Debug)]
+pub struct Job {
+    pub jid: String,
     queue: String,
     job_type: String,
-    args: Vec<A>,
+    args: Option<Bytes>,
+    content: Option<Bytes>,
+    result: Option<Bytes>,
 
     created_at: Option<String>,
     enqueued_at: Option<String>,
-    at: Option<String>,
+    pub at: Option<String>,
     reverse_for: Option<i32>,
     retry: Option<i32>,
     backtrace: Option<i32>,
     failure: Option<Failure>,
-    custom: Option<HashMap<String, C>>
+    expired_at: Option<i32>,
+    unique_for: Option<i32>,
+    unique_until: Option<i32>
 }
 
-impl<A, C> Job<A, C> {
-    fn new(job_type: &str, args: Vec<A>) -> Job<A, C> {
+
+impl Default for Job {
+    fn default() -> Job {
         Job {
-            job_type: job_type.into(),
+            job_type: "none".into(),
             queue: "default".into(),
-            args,
+            args: None,
             jid: Self::random_jid(),
+            content: None,
+            result: None,
             created_at: Some(Utc::now().to_rfc3339()),
             enqueued_at: None,
             at: None,
@@ -42,8 +52,26 @@ impl<A, C> Job<A, C> {
             retry: Some(2),
             backtrace: None,
             failure: None,
-            custom: None,
+            expired_at: None,
+            unique_for: None,
+            unique_until: None
         }
+    }
+}
+
+impl Job {
+    pub fn new(job_type: &str, args: Bytes, content: Bytes) -> Job {
+        Job {
+            job_type: job_type.into(),
+            args: Some(args),
+            content: Some(content),
+            created_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        }
+    }
+
+    pub fn set_enqueued_at(&mut self, timestamp: String) {
+        self.enqueued_at = Some(timestamp);
     }
 
     fn random_jid() -> String {
@@ -51,5 +79,16 @@ impl<A, C> Job<A, C> {
         let buf = rng.gen::<[u8; 12]>();
         
         base64::encode(&buf)
+    }
+
+    pub fn encode(&self) -> Bytes {
+        let buf = Bytes::new();
+
+        buf
+    }
+
+    pub fn decode(buf: &[u8]) -> Job {
+
+        Default::default()
     }
 }
