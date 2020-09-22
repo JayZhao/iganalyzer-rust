@@ -40,7 +40,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(scheduled) = store.get_scheduled().await {
         println!("----------------{:?}", scheduled.size().await);
 
-        scheduled.add(job).await?;
+        //scheduled.add(job).await?;
+        let r = scheduled.get("2020-09-22T15:22:57.499173+00:00|o/G+ZwEwbASUVVmn").await?;
+        println!("{:?}", r);
     }
 
     

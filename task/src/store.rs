@@ -142,9 +142,7 @@ impl RedisSorted {
         if at.is_none() || at == Some("".into()) {
             return Err(RedisStoreError::JobErr("at is empty".into()));
         }
-        
         self.add_elem(&at.clone().unwrap(), job.encode()).await?;
-
         Ok(())
     }
 
@@ -154,6 +152,7 @@ impl RedisSorted {
         let time_f = (at.timestamp_nanos() as f64 / 1000000000.0).to_string();
 
         let name = self.name().clone();
+
         let args = vec![name.as_bytes(), time_f.as_bytes(), payload.as_ref()];
 
         if let Some(store) = self.store.upgrade() {
@@ -179,8 +178,10 @@ impl RedisSorted {
 
     pub async fn get_score(&self, score: f64) -> Result<Option<Vec<Vec<u8>>>, RedisStoreError> {
         if let Some(store) = self.store.upgrade() {
-            let args = vec![self.name.clone(), score.to_string(), score.to_string()];            
-            return Ok(store.read().await.client.execute::<Option<Vec<Vec<u8>>>, String>("ZRangeByScore", Some(&args)).await?);
+            let score = score.to_string();
+            let args = vec![self.name.as_bytes(), score.as_bytes(), score.as_bytes()];
+
+            return Ok(store.read().await.client.execute::<Option<Vec<Vec<u8>>>, &[u8]>("ZRangeByScore", Some(&args)).await?);
         }
 
         Ok(None)
@@ -213,7 +214,7 @@ impl RedisSorted {
 }
 
 #[derive(Debug)]
-struct SetEntry {
+pub struct SetEntry {
     value: Bytes,
     key: Bytes,
     job: Job
