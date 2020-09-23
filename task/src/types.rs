@@ -3,6 +3,8 @@ use std::fmt;
 use url::ParseError;
 use bb8_redis::bb8::RunError;
 use bb8_redis::redis::RedisError;
+use std::num::ParseFloatError;
+use serde_json;
 
 #[derive(Debug)]
 pub enum RedisStoreError {
@@ -12,6 +14,7 @@ pub enum RedisStoreError {
     QueueEmpty(String),
     JobErr(String),
     KeyInvalid(String),
+    JsonInvalid(String)
 }
 
 impl fmt::Display for RedisStoreError {
@@ -34,6 +37,9 @@ impl fmt::Display for RedisStoreError {
             },
             RedisStoreError::KeyInvalid(err) => {
                 write!(f, "Key invalid {}", err)
+            },
+            RedisStoreError::JsonInvalid(err) => {
+                write!(f, "Json invalid: {}", err)
             }
         }
     }
@@ -47,6 +53,23 @@ impl From<ParseError> for RedisStoreError {
 
         RedisStoreError::InvalidUrl(fmt)
     }
+}
+
+impl From<ParseFloatError> for RedisStoreError {
+    fn from(parse_err: ParseFloatError) -> RedisStoreError {
+        let fmt = format!("{}", parse_err);
+
+        RedisStoreError::JsonInvalid(fmt)
+    }
+}
+
+
+impl From<serde_json::error::Error> for RedisStoreError {
+    fn from(parse_err: serde_json::error::Error) -> RedisStoreError {
+        let fmt = format!("{}", parse_err);
+
+        RedisStoreError::JsonInvalid(fmt)
+    }    
 }
 
 impl<E> From<RunError<E>> for RedisStoreError

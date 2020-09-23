@@ -3,6 +3,8 @@ use std::sync::{Arc, Weak};
 
 use tokio::sync::RwLock;
 use bytes::Bytes;
+use chrono::naive::NaiveDateTime;
+use chrono::{Utc, DateTime, SecondsFormat};
 
 use crate::util;
 use crate::types::RedisStoreError;
@@ -142,7 +144,7 @@ impl RedisSorted {
         if at.is_none() || at == Some("".into()) {
             return Err(RedisStoreError::JobErr("at is empty".into()));
         }
-        self.add_elem(&at.clone().unwrap(), job.encode()).await?;
+        self.add_elem(&at.clone().unwrap(), job.encode()?).await?;
         Ok(())
     }
 
@@ -187,23 +189,24 @@ impl RedisSorted {
         Ok(None)
     }
 
-    pub async fn get(&self, key: &str) -> Result<Option<SetEntry>, RedisStoreError> {
+    pub async fn get(&self, key: &str) ->
+        Result<Option<SetEntry>, RedisStoreError> {
         
         if let Ok((timestamp, jid)) = RedisSorted::decompose(key) {
             let elems  = self.get_score(timestamp).await?;
 
             if let Some(elems) = elems {
                 if elems.len() == 1 {
-                    return Ok(Some(SetEntry::new(Bytes::copy_from_slice(key.as_bytes()), Bytes::copy_from_slice(elems[0].as_ref()), Job::decode(&elems[0]))));
+                    return Ok(Some(SetEntry::new(Bytes::copy_from_slice(elems[0].as_ref()), timestamp)));
                 }
 
                 if elems.len() > 1 {
 
                     for elem in elems {
-                        let job = Job::decode(&elem);
+                        let job = Job::decode(&elem)?;
 
                         if job.jid == jid {
-                            return Ok(Some(SetEntry::new(Bytes::copy_from_slice(key.as_bytes()), Bytes::copy_from_slice(elem.as_ref()), job)));
+                            return Ok(Some(SetEntry::new(Bytes::copy_from_slice(elem.as_ref()), timestamp)));
                         }
                     }
                 }
@@ -211,20 +214,187 @@ impl RedisSorted {
         }
         Ok(None)
     }
+
+    pub async fn find<F>(&self, m: &str, f: F) -> Result<(), RedisStoreError> where F: Fn((i32, SetEntry)) {
+        if let Some(store) = self.store.upgrade() {
+            let args = vec![self.name(), "0".into(), "MATCH".into(), m.into(), "COUNT".into(), "100".into()];
+            let elems = store.read().await.client.execute::<Option<Vec<Vec<String>>>, String>("ZSCAN", Some(&args)).await?;
+
+            if let Some(mut elems) = elems {
+                if elems.len() == 1 {
+                    
+                    let elem = elems.pop().unwrap();
+                    let mut iter = elem.iter();
+                    let size = elem.len() as i32;
+                    let mut counter = 0;
+                    loop {
+                        let job = if let Some(job_item) = iter.next() {
+                            Some(job_item)
+                        } else {
+                            None
+                        };
+                        
+                        let score = if let Some(score_item) = iter.next() {
+                            Some(score_item.parse::<f64>()?)
+                        } else {
+                            None
+                        };
+
+                        if let Some(job) = job {
+                            if let Some(score) = score {
+                                f((counter, SetEntry::new(Bytes::copy_from_slice(job.as_bytes()), score)));
+                            }
+                        }
+                        
+                        counter = counter + 1;
+                        if counter >= size {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn page<F>(&self, start: i32, count: i32, f: F) -> Result<Option<i32>, RedisStoreError> where F: Fn((i32, SetEntry)) {
+
+        if let Some(store) = self.store.upgrade() {
+            let args = vec![self.name(), start.to_string(), (start+count).to_string(), "WITHSCORES".into()];
+            let mut elems = store.read().await.client.execute::<Vec<String>, String>("ZRANGE", Some(&args)).await?;
+
+            let mut iter = elems.iter();
+            let size = elems.len() as i32;
+            let mut counter = 0;
+            loop {
+                let job = if let Some(job_item) = iter.next() {
+                    Some(job_item)
+                } else {
+                    None
+                };
+                
+                let score = if let Some(score_item) = iter.next() {
+                    Some(score_item.parse::<f64>()?)
+                } else {
+                    None
+                };
+
+                if let Some(job) = job {
+                    if let Some(score) = score {
+                        f((counter, SetEntry::new(Bytes::copy_from_slice(job.as_bytes()), score)));
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+                
+                counter = counter + 1;
+                if counter >= size {
+                    break;
+                }
+            }
+
+            return Ok(Some(counter))
+        }
+
+        Ok(None)
+    }
+
+    pub async fn each<F>(&self, f: F) -> Result<Option<i32>, RedisStoreError> where F: Fn((i32, SetEntry)) + Clone {
+        let count = 50;
+        let mut current = 0;
+
+        loop {
+            if let Some(size) = self.page(current, count, f.clone()).await? {
+                if size < count {
+                    return Ok(Some(current + size));
+                }
+            }
+
+            current += count;
+        }
+        
+        Ok(None)
+    }
+    
+    pub async fn rem(&self, times_f: f64, jid: String) -> Result<bool, RedisStoreError> {
+        if let Some(store) = self.store.upgrade() {
+            let elems = self.get_score(times_f).await?;
+
+            if let Some(elems) = elems {
+                if elems.len() == 1 {
+                    let elem = Bytes::copy_from_slice(elems[0].as_ref());
+                    let args = vec![self.name.as_bytes(), &elem];
+                    let result = store.read().await.client.execute::<i32, &[u8]>("ZREM", Some(&args)).await?;
+                    if result == 1 {
+                        return Ok(true);
+                    }
+                }
+
+                if elems.len() > 1 {
+
+                    for elem in elems {
+                        let job = Job::decode(&elem)?;
+
+                        if job.jid == jid {
+                            let elem = Bytes::copy_from_slice(elem.as_ref());
+                            let args = vec![self.name.as_bytes(), &elem];
+                            let result = store.read().await.client.execute::<i32, &[u8]>("ZREM", Some(&args)).await?;
+                            if result == 1 {
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(false)
+    }
+
+    pub async fn remove(&self, key: &str) -> Result<bool, RedisStoreError> {
+        if let Ok((timestamp, jid)) = RedisSorted::decompose(key) {
+            if let Some(store) = self.store.upgrade() {
+                return self.rem(timestamp, jid).await;
+            }
+        }
+
+        Ok(false)
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetEntry {
     value: Bytes,
-    key: Bytes,
-    job: Job
+    score: f64
 }
 
 impl SetEntry {
-    pub fn new(key: Bytes, value: Bytes, job: Job) -> SetEntry {
+    pub fn new(value: Bytes, score: f64) -> SetEntry {
         SetEntry {
-            key, value, job
+            value, score
         }
+    }
+
+    pub fn value(&self) -> &Bytes {
+        &self.value
+    }
+
+    pub fn key(&self)  -> Result<String, RedisStoreError> {
+        let secs = self.score as i64;
+        let nsecs = ((self.score - secs as f64) * 1000000000.0) as u32;
+        let datetime = NaiveDateTime::from_timestamp(secs, nsecs);
+        let utc = DateTime::<Utc>::from_utc(datetime, Utc);
+        let st = utc.to_rfc3339_opts(SecondsFormat::Nanos, true);
+        let job = self.job()?;
+        
+        Ok(format!("{}|{}", st, job.jid))
+    }
+
+    pub fn job(&self) -> Result<Job, RedisStoreError> {
+        Ok(Job::decode(&self.value)?)
     }
 }
 

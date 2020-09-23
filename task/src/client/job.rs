@@ -3,8 +3,10 @@ use chrono::Utc;
 use rand::{Rng, thread_rng};
 use base64;
 use bytes::Bytes;
-
-#[derive(Debug)]
+use serde::{Serialize, Deserialize};
+use serde_json::error::Error;
+    
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Failure {
     retry_count: i32,
     failed_at: String,
@@ -14,14 +16,15 @@ pub struct Failure {
     backtrace: Vec<String>
 }
 
-#[derive(Debug)]
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Job {
     pub jid: String,
     queue: String,
     job_type: String,
-    args: Option<Bytes>,
-    content: Option<Bytes>,
-    result: Option<Bytes>,
+    args: Option<Vec<u8>>,
+    content: Option<Vec<u8>>,
+    result: Option<Vec<u8>>,
 
     created_at: Option<String>,
     enqueued_at: Option<String>,
@@ -49,7 +52,7 @@ impl Default for Job {
             enqueued_at: None,
             at: None,
             reverse_for: None,
-            retry: Some(2),
+            retry: Some(0),
             backtrace: None,
             failure: None,
             expired_at: None,
@@ -60,7 +63,7 @@ impl Default for Job {
 }
 
 impl Job {
-    pub fn new(job_type: &str, args: Bytes, content: Bytes) -> Job {
+    pub fn new(job_type: &str, args: Vec<u8>, content: Vec<u8>) -> Job {
         Job {
             job_type: job_type.into(),
             args: Some(args),
@@ -81,14 +84,11 @@ impl Job {
         base64::encode(&buf)
     }
 
-    pub fn encode(&self) -> Bytes {
-        let buf = Bytes::new();
-
-        buf
+    pub fn encode(&self) -> Result<Bytes, Error> {
+        Ok(Bytes::copy_from_slice(serde_json::to_string(self)?.as_bytes()))
     }
 
-    pub fn decode(buf: &[u8]) -> Job {
-
-        Default::default()
+    pub fn decode(buf: &[u8]) -> Result<Job, Error> {
+        Ok(serde_json::from_str(&String::from_utf8_lossy(buf))?)
     }
 }

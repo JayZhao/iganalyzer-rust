@@ -13,38 +13,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let client = redis_client::RedisClient::new(config).await?;
 
-
-    let result = client.execute::<Option<String>, String>("PING", None).await?;
-
-
-    println!("{:?}", result);
-
-    println!("{:?}", client.info().await?);
-
     let store = store::RedisStore::new("core".into(), client).await;
 
-
-    let n = util::utc_now();
-
-    println!("{:?}", n);
-
-    let s = util::parse_time(&n);
-    println!("{:?}", s);
-
-
-    let mut job = client::job::Job::new("test", Bytes::new(), Bytes::new());
+    let mut job = client::job::Job::new("test", Vec::new(), Vec::new());
 
     job.at = Some(util::utc_now());
 
 
     if let Some(scheduled) = store.get_scheduled().await {
-        println!("----------------{:?}", scheduled.size().await);
+        scheduled.add(job.clone()).await?;
+        
+        let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
+        let r = scheduled.get(&r.unwrap().key()?).await?;
 
-        //scheduled.add(job).await?;
-        let r = scheduled.get("2020-09-22T15:22:57.499173+00:00|o/G+ZwEwbASUVVmn").await?;
-        println!("{:?}", r);
+        // scheduled.find("*", |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+        
+        // let a = scheduled.page(0, 2, |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+
+        scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
+        let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+
+        println!("{:?}", a);
+        
     }
-
+    
     
     Ok(())
 }

@@ -8,3 +8,4 @@ pub fn utc_now() -> String {
 pub fn parse_time(s: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(s).unwrap()
 }
+
