@@ -21,19 +21,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
     if let Some(scheduled) = store.get_scheduled().await {
-        scheduled.add(job.clone()).await?;
+        // scheduled.add(job.clone()).await?;
         
-        let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
-        let r = scheduled.get(&r.unwrap().key()?).await?;
+        // let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
+        // let r = scheduled.get(&r.unwrap().key()?).await?;
 
         // scheduled.find("*", |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
         
         // let a = scheduled.page(0, 2, |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
 
-        scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
-        let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+        // scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
+        scheduled.remove_before("2020-09-24T02:37:36.656845+00:00", 1, |_, _| {}).await?;
 
-        println!("{:?}", a);
+        let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+        // println!("{:?}", a);
         
     }
     

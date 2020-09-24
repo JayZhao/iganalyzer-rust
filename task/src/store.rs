@@ -262,7 +262,7 @@ impl RedisSorted {
 
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name(), start.to_string(), (start+count).to_string(), "WITHSCORES".into()];
-            let mut elems = store.read().await.client.execute::<Vec<String>, String>("ZRANGE", Some(&args)).await?;
+            let elems = store.read().await.client.execute::<Vec<String>, String>("ZRANGE", Some(&args)).await?;
 
             let mut iter = elems.iter();
             let size = elems.len() as i32;
@@ -311,6 +311,8 @@ impl RedisSorted {
                 if size < count {
                     return Ok(Some(current + size));
                 }
+            } else {
+                break;
             }
 
             current += count;
@@ -361,6 +363,76 @@ impl RedisSorted {
             }
         }
 
+        Ok(false)
+    }
+
+    pub async fn remove_elem(&self, timestamp: &str, jid: &str) -> Result<bool, RedisStoreError> {
+        if let Some(store) = self.store.upgrade() {
+            let time = util::parse_time(timestamp);
+            let time_f = time.timestamp_nanos() as f64 / 1000000000.0;
+            return self.rem(time_f, jid.into()).await;
+        }
+
+        Ok(false)
+    }
+
+    pub async fn remove_before<F>(&self, timestamp: &str, max_count: i64, f: F) -> Result<Option<i64>, RedisStoreError> where F: Fn(String, f64) + Clone {
+        if let Some(store) = self.store.upgrade() {
+            let time = util::parse_time(timestamp);
+            let time_f = time.timestamp_nanos() as f64 / 1000000000.0;
+            let args = vec![self.name(), "-INF".into(), time_f.to_string(), "WITHSCORES".into(), "LIMIT".into(), "0".into(), max_count.to_string()];
+            let elems = store.read().await.client.execute::<Vec<String>, String>("ZRANGEBYSCORE", Some(&args)).await?;
+
+            let mut iter = elems.iter();
+            let size = elems.len() as i32;
+            let mut counter = 0;
+            loop {
+                let job = if let Some(job_item) = iter.next() {
+                    Some(job_item)
+                } else {
+                    None
+                };
+                
+                let score = if let Some(score_item) = iter.next() {
+                    Some(score_item.parse::<f64>()?)
+                } else {
+                    None
+                };
+
+                if let Some(job) = job {
+                    if let Some(score) = score {
+                        let args = vec![self.name(), job.into()];
+                        store.read().await.client.execute::<i32, String>("ZREM", Some(&args)).await?;
+                        f(job.into(), score);
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+                
+                counter = counter + 1;
+                if counter >= size {
+                    break;
+                }
+            }
+
+            return Ok(Some(counter as i64))
+        }
+        
+        Ok(None)
+    }
+
+    pub async fn move_to<F>(&self, sorted_set: &RedisSorted, entry: &SetEntry, new_time: DateTime<Utc>) -> Result<bool, RedisStoreError> {
+        if let Some(store) = self.store.upgrade() {
+            let job = entry.job()?;
+            let args = vec![self.name(), String::from_utf8_lossy(entry.value()).into()];
+            store.read().await.client.execute::<i32, String>("ZREM", Some(&args)).await?;
+            sorted_set.add_elem(&new_time.to_rfc3339_opts(SecondsFormat::Nanos, true), Bytes::copy_from_slice(job.jid.as_bytes())).await?;
+
+            return Ok(true)
+        }
+        
         Ok(false)
     }
 }
