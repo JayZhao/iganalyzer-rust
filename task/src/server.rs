@@ -114,9 +114,25 @@ impl Listener {
 
             let socket = self.accept().await?;
 
+            let mut conn = Connection::new(socket);
+
+            match conn.handshake().await {
+                Ok(true) => {
+                },
+                Ok(false) => {
+                    drop(conn);
+                    continue;
+                },
+                Err(e) => {
+                    println!("{:?}", e);
+                    continue;
+                }
+            };
+
+            
             let mut handler = Handler {
                 store: self.store.clone(),
-                connection: Connection::new(socket),
+                connection: conn,
                 limit_connections: self.limit_connections.clone(),
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
