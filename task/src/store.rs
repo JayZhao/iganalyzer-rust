@@ -11,14 +11,15 @@ use crate::types::RedisStoreError;
 use crate::redis_client::RedisClient;
 use crate::client::job::Job;
 
-struct RedisQueue {
+#[derive(Debug)]
+pub struct RedisQueue {
     name: String,
     done: bool,
     store: Weak<RwLock<RedisStoreInner>>
 }
 
 impl RedisQueue {
-    pub fn new(name: String, store: Weak<RwLock<RedisStoreInner>>) -> RedisQueue {
+    fn new(name: String, store: Weak<RwLock<RedisStoreInner>>) -> RedisQueue {
         RedisQueue {name, done: false, store}
     }
 
@@ -36,6 +37,19 @@ impl RedisQueue {
         }
 
         Ok(0)
+    }
+
+    pub async fn page<F>(&self, start: i64, count: i64, f: F) -> Result<Option<i64>, RedisStoreError> {
+        if let Some(store) = self.store.upgrade() {
+            let args = vec![self.name(), start.to_string(), (start+count).to_string()];
+            let elems = store.read().await.client.execute::<Vec<Vec<u8>>, String>("LRANGE", Some(&args)).await?;
+
+            for elem in elems.iter() {
+                println!("{:?}", elems);
+            }
+        }
+        
+        Ok(None)
     }
 
     pub async fn clear(&self) -> Result<(), RedisStoreError> {
@@ -106,7 +120,7 @@ impl RedisQueue {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RedisSorted {
     name: String,
     store: Weak<RwLock<RedisStoreInner>>
@@ -470,6 +484,7 @@ impl SetEntry {
     }
 }
 
+#[derive(Debug)]
 struct RedisStoreInner {
     name: String,
     queue_set: HashMap<String, RedisQueue>,
@@ -480,6 +495,7 @@ struct RedisStoreInner {
     client: RedisClient
 }
 
+#[derive(Debug, Clone)]
 pub struct RedisStore {
     inner: Arc<RwLock<RedisStoreInner>>
 }
@@ -517,6 +533,27 @@ impl RedisStore {
 
     pub async fn get_working(&self) -> Option<RedisSorted> {
         self.inner.read().await.working.clone()
+    }
+
+    pub async fn fetch_queue_then<F>(&self, name: &str, f: F) -> Result<(), RedisStoreError>
+        where F: Fn(&RedisQueue) -> Result<(), RedisStoreError>
+    {
+        if let Some(queue) = self.inner.read().await.queue_set.get(name) {
+            return f(queue)
+        }
+
+        Ok(())
+    }
+
+    pub async fn flush(&self) -> Result<bool, RedisStoreError> {
+        let client = &self.inner.read().await.client;
+        let r = client.execute::<i32, &[u8]>("FLUSHALL", None).await?;
+
+        if r == 1 {
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     async fn init_queue(&mut self) {

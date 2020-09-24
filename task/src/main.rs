@@ -1,11 +1,14 @@
 use std::error::Error;
-use bytes::Bytes;
+use tokio::signal;
 
 mod types;
 mod redis_client;
 mod store;
 mod client;
 mod util;
+mod connection;
+mod server;
+mod shutdown;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -20,7 +23,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     job.at = Some(util::utc_now());
 
 
-    if let Some(scheduled) = store.get_scheduled().await {
+    server::run(server::ServerOpts{bind_host: "localhost".into(), bind_port: 9000}, store, signal::ctrl_c()).await?;
+    // if let Some(scheduled) = store.get_scheduled().await {
         // scheduled.add(job.clone()).await?;
         
         // let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
@@ -31,12 +35,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // let a = scheduled.page(0, 2, |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
 
         // scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
-        scheduled.remove_before("2020-09-24T02:37:36.656845+00:00", 1, |_, _| {}).await?;
+    //scheduled.remove_before("2020-09-24T02:37:36.656845+00:00", 1, |_, _| {}).await?;
 
-        let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+    //let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
         // println!("{:?}", a);
         
-    }
+//}
     
     
     Ok(())

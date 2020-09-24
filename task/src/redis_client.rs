@@ -1,7 +1,6 @@
-use std::concat;
 use bb8_redis::{
     bb8,
-    redis::{cmd, Cmd, FromRedisValue, ToRedisArgs},
+    redis::{cmd, FromRedisValue, ToRedisArgs},
     RedisConnectionManager, RedisPool
 };
 use url::Url;

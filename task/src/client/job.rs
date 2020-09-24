@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use chrono::Utc;
 use rand::{Rng, thread_rng};
 use base64;
