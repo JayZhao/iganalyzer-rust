@@ -1,4 +1,5 @@
 use tokio::sync::broadcast;
+use log::*;
 
 #[derive(Debug)]
 pub(crate) struct Shutdown {
@@ -20,13 +21,12 @@ impl Shutdown {
     }
 
     pub(crate) async fn recv(&mut self) {
-        println!("_____________________________");
-         if self.shutdown {
+        if self.shutdown {
             return;
         }
 
-         let _ = self.notify.recv().await;
+        let _ = self.notify.recv().await;
 
-         self.shutdown = true;
+        self.shutdown = true;
     }
 }

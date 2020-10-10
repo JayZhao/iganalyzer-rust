@@ -1,17 +1,21 @@
 use std::error::Error;
 use tokio::signal;
 
-mod types;
-mod redis_client;
-mod store;
-mod client;
-mod util;
-mod connection;
-mod server;
-mod shutdown;
+use task::types;
+use task::redis_client;
+use task::store;
+use task::client;
+use task::util;
+use task::connection;
+use task::server;
+use task::shutdown;
+use task::command;
+use task::frame;
 
-#[tokio::main]
+#[tokio::test]
 async fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
+
     let config = redis_client::RedisClientConfig::new("localhost".into(), 6379, 0);
 
     let client = redis_client::RedisClient::new(config).await?;
@@ -23,7 +27,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     job.at = Some(util::utc_now());
 
 
-    server::run(server::ServerOpts{bind_host: "localhost".into(), bind_port: 9000}, store, signal::ctrl_c()).await?;
+    server::run(server::ServerOpts{bind_host: "0.0.0.0".into(), bind_port: 9000}, store, signal::ctrl_c()).await?;
     // if let Some(scheduled) = store.get_scheduled().await {
         // scheduled.add(job.clone()).await?;
         

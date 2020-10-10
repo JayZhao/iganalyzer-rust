@@ -1,14 +1,20 @@
 use bytes::{Buf, BytesMut};
-use std::io::{self, Cursor};
+use std::io::Cursor;
+use std::rc::Weak;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
+use log::*;
+use chrono::{DateTime, Utc};
+use tokio::sync::RwLock;
+use crate::frame::Frame;
+use crate::server::ClientData;
 
 #[derive(Debug)]
 pub struct Connection {
     stream: BufWriter<TcpStream>,
-
     buffer: BytesMut,
+    client_data: Option<ClientData>
 }
 
 impl Connection {
@@ -16,97 +22,118 @@ impl Connection {
         Connection {
             stream: BufWriter::new(socket),
             buffer: BytesMut::with_capacity(4 * 1024),
+            client_data: None
         }
     }
 
-    pub async fn _handshake(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.send_hello().await?;
-        self.client_from_hello().await?;
-        self.send_err_msg("Handshade failed").await?;
-        Ok(())
+    pub fn set_client_data(&mut self, client_data: ClientData) {
+        self.client_data = Some(client_data);
     }
 
-    pub (crate) async fn handshake(&mut self) -> Result<bool, Box<dyn std::error::Error>>  {
+    pub fn client_data(&self) -> Option<&ClientData> {
+        self.client_data.as_ref()
+    }
 
-        let mut delay = time::delay_for(Duration::from_millis(50));
+    pub async fn read_frame(&mut self) -> crate::Result<Option<Frame>> {
+        loop {
+            let mut buf = Cursor::new(&self.buffer[..]);
+
+            if let Ok(()) = Frame::check(&mut buf) {
+                if let Ok(frame) =  Frame::parse(&mut buf) {
+                    println!("Recv frame: {:?}", frame.to_string());
+                    
+                    let len = buf.position();
+                    self.buffer.advance(len as usize);
+
+                    return Ok(Some(frame));
+                }
+            }
+
+            if 0 == self.stream.read_buf(&mut self.buffer).await? {
+                if self.buffer.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Err("connection reset by peer".into());
+                }
+            }
+        }
+
+    }
+
+    pub async fn start(&mut self) -> crate::Result<ClientData> {
+        self.say_hi().await?;
+        let client_data = self.client_from_hello().await?;
+        Ok(client_data)
+    }
+
+    pub (crate) async fn handshake(&mut self) -> crate::Result<ClientData>  {
+        let mut delay = time::delay_for(Duration::from_millis(5000));
         loop {
             tokio::select! {
                 _ = &mut delay => {
-                    println!("operation timed out");
-                    self.send_err_msg("Handshade timeout").await?;
-                    return Ok(false);
-                }
-                _ = self._handshake() => {
-                    println!("operation completed");
-                    return Ok(true);
-                }
-            }
-        }
-    }
-
-    pub (crate) async fn send_hello(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.stream.write_all("HELLO\r\n".as_bytes()).await?;
-        self.stream.flush().await?;
-
-        Ok(())
-    }
-
-    pub (crate) async fn send_err_msg(&mut self, err_msg: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.stream.write_all(format!("ERROR {}\r\n", err_msg).as_bytes()).await?;
-        self.stream.flush().await?;
-
-        Ok(())
-    }
-
-    pub (crate) async fn client_from_hello(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if 0 == self.stream.read_buf(&mut self.buffer).await? {
-            if self.buffer.is_empty() {
-                return Ok(());
-            } else {
-                return Err("connection reset by peer".into());
-            }
-        }
-        
-        match get_line(&mut Cursor::new(&self.buffer[..])) {
-            Ok(line) => {
-                println!("{:?}", String::from_utf8_lossy(line));
-
-                let line = String::from_utf8_lossy(line);
-                let cmds: Vec<&str> = line.split(' ').collect();
-
-                match cmds[0] {
-                    "HELLO" => {
-                    },
-                    _ => {
-                        return Err("handshake failed".into());
+                    self.send_msg("Handshake timeout").await?;
+                    return Err("Handshake timeout".into());
+                },
+                r = self.start() => {
+                    match r {
+                        Ok(client_data) => {
+                            return Ok(client_data)
+                        },
+                        Err(e) => {
+                            self.send_msg(&e.to_string()).await?;
+                            return Err(e);
+                        }
                     }
                 }
-            },
-            Err(_e) => {
-                return Err("invalid data".into());
             }
-        };
-        
-        Ok(())
-    }
- }
-
-
-pub enum Error {
-    Incomplete,
-    Other,
-}
-
-fn get_line<'a>(src: &mut Cursor<&'a [u8]>) -> Result<&'a [u8], Error> {
-    let start = src.position() as usize;
-    let end = src.get_ref().len() - 1;
-
-    for i in start..end {
-        if src.get_ref()[i] == b'\r' && src.get_ref()[i + 1] == b'\n' {
-            src.set_position((i + 2) as u64);
-            return Ok(&src.get_ref()[start..i]);
         }
     }
 
-    Err(Error::Incomplete)
+    pub (crate) async fn say_hi(&mut self) -> crate::Result<()> {
+        self.stream.write_all("+HI\r\n".as_bytes()).await?;
+        self.stream.flush().await?;
+
+        Ok(())
+    }
+
+    pub (crate) async fn send_msg(&mut self, msg: &str) -> crate::Result<()> {
+        self.stream.write_all(format!("{}\r\n", msg).as_bytes()).await?;
+        self.stream.flush().await?;
+
+        Ok(())
+    }
+
+    pub (crate) async fn client_from_hello(&mut self) -> crate::Result<ClientData> {
+        match self.read_frame().await {
+            Ok(Some(frame)) => {
+                let cmds: Vec<&str> = frame.to_string()?.split(' ').collect();
+                if cmds[0] == "HELLO" {
+
+                    let data = match ClientData::decode(cmds[1].as_ref()) {
+                        Ok(data) => {
+                            data
+                        },
+                        Err(e) => {
+                            return Err("Handshake failed, invalid client data".into());
+                        }
+                    };
+                    self.stream.write_all(b"+OK\r\n").await?;
+                    self.stream.flush().await?;
+
+                    return Ok(data);
+                } else {
+                    return Err("Handshake failed".into());
+                }
+            },
+            
+            Ok(None) => {
+                return Err("Invalid connection".into())
+            },
+            Err(e) => {
+                return Err(e.into())
+            }
+        }
+    }
 }
+
+
