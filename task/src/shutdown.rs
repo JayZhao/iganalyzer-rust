@@ -1,5 +1,5 @@
-use tokio::sync::broadcast;
 use log::*;
+use tokio::sync::broadcast;
 
 #[derive(Debug)]
 pub(crate) struct Shutdown {
@@ -9,14 +9,14 @@ pub(crate) struct Shutdown {
 }
 
 impl Shutdown {
-     pub(crate) fn new(notify: broadcast::Receiver<()>) -> Shutdown {
+    pub(crate) fn new(notify: broadcast::Receiver<()>) -> Shutdown {
         Shutdown {
             shutdown: false,
             notify,
         }
     }
 
-     pub(crate) fn is_shutdown(&self) -> bool {
+    pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown
     }
 
