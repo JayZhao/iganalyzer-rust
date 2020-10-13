@@ -1,16 +1,16 @@
 use std::error::Error;
 use tokio::signal;
 
-use task::types;
-use task::redis_client;
-use task::store;
 use task::client;
-use task::util;
+use task::command;
 use task::connection;
+use task::frame;
+use task::redis_client;
 use task::server;
 use task::shutdown;
-use task::command;
-use task::frame;
+use task::store;
+use task::types;
+use task::util;
 
 #[tokio::test]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -26,26 +26,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     job.at = Some(util::utc_now());
 
-
-    server::run(server::ServerOpts{bind_host: "0.0.0.0".into(), bind_port: 9000}, store, signal::ctrl_c()).await?;
+    server::run(
+        server::ServerOpts {
+            bind_host: "0.0.0.0".into(),
+            bind_port: 9000,
+        },
+        store,
+        signal::ctrl_c(),
+    )
+    .await?;
     // if let Some(scheduled) = store.get_scheduled().await {
-        // scheduled.add(job.clone()).await?;
-        
-        // let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
-        // let r = scheduled.get(&r.unwrap().key()?).await?;
+    // scheduled.add(job.clone()).await?;
 
-        // scheduled.find("*", |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
-        
-        // let a = scheduled.page(0, 2, |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+    // let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
+    // let r = scheduled.get(&r.unwrap().key()?).await?;
 
-        // scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
+    // scheduled.find("*", |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+
+    // let a = scheduled.page(0, 2, |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
+
+    // scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
     //scheduled.remove_before("2020-09-24T02:37:36.656845+00:00", 1, |_, _| {}).await?;
 
     //let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
-        // println!("{:?}", a);
-        
-//}
-    
-    
+    // println!("{:?}", a);
+
+    //}
+
     Ok(())
 }
