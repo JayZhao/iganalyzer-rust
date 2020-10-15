@@ -6,10 +6,12 @@ use chrono::naive::NaiveDateTime;
 use chrono::{DateTime, SecondsFormat, Utc};
 use tokio::sync::RwLock;
 
+
 use crate::client::job::Job;
 use crate::redis_client::RedisClient;
 use crate::types::RedisStoreError;
 use crate::util;
+use crate::working::Reservation;
 
 #[derive(Debug)]
 pub struct RedisQueue {
@@ -641,6 +643,10 @@ impl SetEntry {
 
     pub fn job(&self) -> Result<Job, RedisStoreError> {
         Ok(Job::decode(&self.value)?)
+    }
+
+    pub fn reservation<'a>(&self) -> Result<Reservation<'a>, RedisStoreError> {
+        Ok(Reservation::decode(&self.value).unwrap())
     }
 }
 

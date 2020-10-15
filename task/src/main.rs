@@ -16,6 +16,7 @@ pub mod types;
 pub mod util;
 pub mod task_runner;
 pub mod manager;
+pub mod working;
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {

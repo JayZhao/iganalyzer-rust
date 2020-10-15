@@ -1,19 +1,31 @@
 use log::*;
 use chrono::{Utc, DateTime};
 use bytes::Buf;
+use std::collections::HashMap;
 use crate::store::RedisStore;
 use crate::store::RedisSorted;
 use crate::client::job::Job;
+use crate::working::Reservation;
 
-pub struct Manager {
+pub struct Manager<'a> {
     store: RedisStore,
+    working_map: HashMap<String, Reservation<'a>>
 }
 
 
-impl Manager {
-    pub fn new(store: RedisStore) -> Manager {
+impl<'a> Manager<'a> {
+    pub fn new(store: RedisStore) -> Manager<'a> {
         Manager {
-            store
+            store,
+            working_map: HashMap::new()
+        }
+    }
+
+    pub async fn load_working_set(&self) {
+        if let Some(working) = self.store.get_working().await {
+            working.each(|(score, entry)| {
+                let res = entry.reservation();
+            });
         }
     }
     
