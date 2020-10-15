@@ -17,6 +17,10 @@ use crate::connection::Connection;
 use crate::command::execute;
 use crate::shutdown::Shutdown;
 use crate::command::ClientBeat;
+use crate::task_runner::TaskRunner;
+use crate::task_runner::ScannerCategory;
+use crate::task_runner::Scanner;
+use crate::manager::Manager;
 
 #[derive(Debug)]
 pub struct ServerContext {
@@ -218,6 +222,20 @@ pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> 
         started_at: Utc::now(),
         cmds: 0
     }));
+    
+    let mut task_runner = TaskRunner::<Scanner>::new(Shutdown::new(notify_shutdown.subscribe()));
+    let scheduled_scanner = Scanner::new("scheduled".into(), ScannerCategory::Scheduled,store.get_scheduled().await.unwrap());
+    let retries_scanner = Scanner::new("retries".into(), ScannerCategory::Retry,store.get_retries().await.unwrap());
+    let dead_scanner = Scanner::new("dead".into(), ScannerCategory::Dead,store.get_dead().await.unwrap());
+    task_runner.add_task(5, scheduled_scanner).await;
+    task_runner.add_task(5, retries_scanner).await;
+    task_runner.add_task(60, dead_scanner).await;
+
+    TaskRunner::run(task_runner).await;
+
+
+    let manager = Manager::new(store.clone());
+    
     let mut server = Server {
         opts,
         context,
@@ -312,7 +330,6 @@ impl Server {
                 }
             };
 
-            
             let mut handler = Handler {
                 store: self.store.clone(),
                 connection: conn,

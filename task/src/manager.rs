@@ -2,14 +2,21 @@ use log::*;
 use chrono::{Utc, DateTime};
 use bytes::Buf;
 use crate::store::RedisStore;
+use crate::store::RedisSorted;
 use crate::client::job::Job;
 
-struct Manager {
+pub struct Manager {
     store: RedisStore,
 }
 
 
 impl Manager {
+    pub fn new(store: RedisStore) -> Manager {
+        Manager {
+            store
+        }
+    }
+    
     async fn push(&self, mut job: Job) {
         if job.jid == "" || job.jid.len() < 8 {
             error!("All jobs must have a reasonable jid parameter");
@@ -46,23 +53,18 @@ impl Manager {
                         if time_at < Utc::now() {
                             if let Some(scheduled) = self.store.get_scheduled().await {
                                 if let Ok(job) = Job::encode(&job) {
-                                    scheduled.add_elem(&at, job.into()).await;
+                                    if let Err(e) = scheduled.add_elem(&at, job).await {
+                                        error!("Job cannot be pushed into the schedued queue, {:?}", e);
+                                    }
                                 }
                             }
+
                         } else {
-                            self.store.fetch_queue_then(&job.queue.clone(), |mut queue| {
-                                job.enqueued_at = Some(Utc::now().to_rfc3339());
-
-                                if let Ok(job) = Job::encode(&job) {
-                                    queue.push(job.as_ref());
-                                }
-
-                                Ok(())
-                            });
+                            self.enqueue(job).await;
                         }
                     },
 
-                    Err(e) => {
+                    Err(_e) => {
                         error!("Invalid timestamp {:?}", at);
                     }
                 }
@@ -70,7 +72,85 @@ impl Manager {
         }
     }
 
-    async fn enqueue(&self, job: Job) {
+    pub async fn purge(&self, when: &str) {
+        if let Some(dead) = self.store.get_dead().await {
+            match dead.remove_before(when, 100 as i64, |job, score| {
+                debug!("Remove job {:?} with score {:?}", job, score);
+            }).await {
+                Ok(count) => {
+                    info!("Remove {:?} jobs", count);
+                },
+                Err(e) => {
+                    error!("Err when remove jobs, {:?}", e);
+                }
+            }
+        }
+    }
+
+    pub async fn enqueue(&self, mut job: Job) {
+        self.store.fetch_queue_then(&job.queue.clone(), |mut queue| {
+            async move {
+                job.enqueued_at = Some(Utc::now().to_rfc3339());
+
+                if let Ok(job) = Job::encode(&job) {
+                    if let Err(e) = queue.push(job.as_ref()).await {
+                        error!("Job cannot be pushed into the queue, {:?}", e);
+                    }
+                }
+
+                queue
+            }
+        }).await;
+    }
+
+    pub async fn schedule(&self, when: &str) -> i64 {
         
+        if let Some(scheduled) = self.store.get_scheduled().await {
+            return self.shift(when, scheduled).await;
+        }
+
+        0
+    }
+
+    pub async fn retry(&self, when: &str) -> i64 {
+        if let Some(retries) = self.store.get_retries().await {
+            return self.shift(when, retries).await;
+        }
+
+        0
+
+    }
+
+    async fn shift(&self, when: &str, queue: RedisSorted) -> i64 {
+        let mut total: i64 = 0;
+        let mut jobs = vec![];
+        loop {
+            match queue.remove_before(when, 100 as i64, |job, _score | {
+                if let Ok(job) = Job::decode(&job.as_ref()) {
+                    jobs.push(job);
+                }
+            }).await {
+                Ok(count) => {
+                    if let Some(count) = count {
+                        total += count;
+
+                        if count != 100 {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                },
+                Err(e) => {
+                    error!("Error pushing job {:?}", e);
+                }
+            }
+        }
+
+        for job in jobs {
+            self.enqueue(job).await;
+        }
+
+        total
     }
 }

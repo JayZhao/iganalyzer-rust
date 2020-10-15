@@ -515,10 +515,10 @@ impl RedisSorted {
         &self,
         timestamp: &str,
         max_count: i64,
-        f: F,
+        mut f: F,
     ) -> Result<Option<i64>, RedisStoreError>
     where
-        F: Fn(String, f64) + Clone,
+        F: FnMut(String, f64),
     {
         if let Some(store) = self.store.upgrade() {
             let time = util::parse_time(timestamp);
@@ -682,7 +682,7 @@ impl RedisStore {
         self.inner.read().await.scheduled.clone()
     }
 
-    pub async fn get_retires(&self) -> Option<RedisSorted> {
+    pub async fn get_retries(&self) -> Option<RedisSorted> {
         self.inner.read().await.retries.clone()
     }
 
@@ -694,15 +694,16 @@ impl RedisStore {
         self.inner.read().await.working.clone()
     }
 
-    pub async fn fetch_queue_then<F>(&self, name: &str, mut f: F) -> Result<(), RedisStoreError>
+    pub async fn fetch_queue_then<F, U>(&self, name: &str, f: F)
     where
-        F: FnMut(&mut RedisQueue) -> Result<(), RedisStoreError>,
+        F: FnOnce(RedisQueue) -> U + Send + 'static,
+        U: std::future::Future<Output=RedisQueue> + Send + 'static,
     {
-        if let Some(queue) = self.inner.write().await.queue_set.get_mut(name) {
-            return f(queue);
+        let mut inner = self.inner.write().await;
+        if let Some(queue) = inner.queue_set.remove(name) {
+            let queue = f(queue).await;
+            inner.queue_set.insert(name.into(), queue);
         }
-
-        Ok(())
     }
 
     pub async fn flush(&self) -> Result<bool, RedisStoreError> {

@@ -35,7 +35,7 @@ async fn flush(store: &RedisStore) {
 async fn push(conn: &mut Connection, cmd: &str){
     match job::Job::decode(cmd.as_ref()) {
         Ok(mut job) => {
-            job.retry = Some(2); // default
+            job.retry = Some(0); // default
             job.jid = job::Job::random_jid();
             job.created_at = Some(Utc::now().to_rfc3339());
             debug!("{:?}", job);
