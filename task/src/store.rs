@@ -5,13 +5,14 @@ use bytes::Bytes;
 use chrono::naive::NaiveDateTime;
 use chrono::{DateTime, SecondsFormat, Utc};
 use tokio::sync::RwLock;
-
+use log::*;
 
 use crate::client::job::Job;
 use crate::redis_client::RedisClient;
-use crate::types::RedisStoreError;
 use crate::util;
 use crate::working::Reservation;
+use crate::Result;
+use crate::types::TaskError;
 
 #[derive(Debug)]
 pub struct RedisQueue {
@@ -37,7 +38,7 @@ impl RedisQueue {
         self.name.to_string()
     }
 
-    pub async fn size(&self) -> Result<u64, RedisStoreError> {
+    pub async fn size(&self) -> Result<u64> {
         if let Some(store) = self.store.upgrade() {
             store
                 .read()
@@ -55,7 +56,7 @@ impl RedisQueue {
         start: i64,
         count: i64,
         f: F,
-    ) -> Result<Option<i64>, RedisStoreError> {
+    ) -> Result<Option<i64>> {
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name(), start.to_string(), (start + count).to_string()];
             let elems = store
@@ -73,7 +74,7 @@ impl RedisQueue {
         Ok(None)
     }
 
-    pub async fn clear(&self) -> Result<(), RedisStoreError> {
+    pub async fn clear(&self) -> Result<()> {
         if let Some(store) = self.store.upgrade() {
             let args1 = vec![self.name()];
             let args2 = vec!["queues".into(), self.name()];
@@ -95,13 +96,13 @@ impl RedisQueue {
         Ok(())
     }
 
-    pub async fn add(&mut self, mut job: Job) -> Result<(), RedisStoreError> {
+    pub async fn add(&mut self, mut job: Job) -> Result<()> {
         let enqueued_at = util::utc_now();
         job.set_enqueued_at(enqueued_at);
         Ok(())
     }
 
-    pub async fn push(&mut self, payload: &[u8]) -> Result<(), RedisStoreError> {
+    pub async fn push(&mut self, payload: &[u8]) -> Result<()> {
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name.as_bytes(), payload];
 
@@ -116,9 +117,9 @@ impl RedisQueue {
         Ok(())
     }
 
-    pub async fn pop(&mut self) -> Result<Option<Vec<u8>>, RedisStoreError> {
+    pub async fn pop(&mut self) -> Result<Option<Vec<u8>>> {
         if self.done {
-            return Err(RedisStoreError::QueueEmpty(self.name.clone()));
+            return Err(Box::new(TaskError::QueueEmpty(self.name.clone())));
         }
 
         if let Some(store) = self.store.upgrade() {
@@ -136,9 +137,9 @@ impl RedisQueue {
         Ok(None)
     }
 
-    pub async fn bpop(&mut self) -> Result<Option<Vec<u8>>, RedisStoreError> {
+    pub async fn bpop(&mut self) -> Result<Option<Vec<u8>>> {
         if self.done {
-            return Err(RedisStoreError::QueueEmpty(self.name.clone()));
+            return Err(Box::new(TaskError::QueueEmpty(self.name.clone())));
         }
 
         if let Some(store) = self.store.upgrade() {
@@ -156,7 +157,7 @@ impl RedisQueue {
         Ok(None)
     }
 
-    pub async fn delete(&mut self, vals: &[u8]) -> Result<(), RedisStoreError> {
+    pub async fn delete(&mut self, vals: &[u8]) -> Result<()> {
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name.as_bytes(), vals];
             return Ok(store
@@ -182,7 +183,7 @@ impl RedisSorted {
         self.name.clone()
     }
 
-    pub async fn size(&self) -> Result<Option<usize>, RedisStoreError> {
+    pub async fn size(&self) -> Result<Option<usize>> {
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name.clone()];
 
@@ -197,7 +198,7 @@ impl RedisSorted {
         Ok(None)
     }
 
-    pub async fn clear(&self) -> Result<(), RedisStoreError> {
+    pub async fn clear(&self) -> Result<()> {
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name.clone()];
 
@@ -212,16 +213,16 @@ impl RedisSorted {
         Ok(())
     }
 
-    pub async fn add(&self, job: Job) -> Result<(), RedisStoreError> {
+    pub async fn add(&self, job: Job) -> Result<()> {
         let at = job.at.clone();
         if at.is_none() || at == Some("".into()) {
-            return Err(RedisStoreError::JobErr("at is empty".into()));
+            return Err(Box::new(TaskError::JobErr("at is empty".into())));
         }
         self.add_elem(&at.clone().unwrap(), job.encode()?).await?;
         Ok(())
     }
 
-    pub async fn add_elem(&self, timestamp: &str, payload: Bytes) -> Result<(), RedisStoreError> {
+    pub async fn add_elem(&self, timestamp: &str, payload: Bytes) -> Result<()> {
         let at = util::parse_time(&timestamp);
 
         let time_f = (at.timestamp_nanos() as f64 / 1000000000.0).to_string();
@@ -243,11 +244,11 @@ impl RedisSorted {
     }
 
     // timestmap|jid
-    pub fn decompose(key: &str) -> Result<(f64, String), RedisStoreError> {
+    pub fn decompose(key: &str) -> Result<(f64, String)> {
         let slice = key.split("|").collect::<Vec<&str>>();
 
         if slice.len() != 2 {
-            return Err(RedisStoreError::KeyInvalid(key.into()));
+            return Err(Box::new(TaskError::KeyInvalid(key.into())));
         }
         let timestamp = slice[0];
         let time = util::parse_time(timestamp);
@@ -258,7 +259,7 @@ impl RedisSorted {
         ))
     }
 
-    pub async fn get_score(&self, score: f64) -> Result<Option<Vec<Vec<u8>>>, RedisStoreError> {
+    pub async fn get_score(&self, score: f64) -> Result<Option<Vec<Vec<u8>>>> {
         if let Some(store) = self.store.upgrade() {
             let score = score.to_string();
             let args = vec![self.name.as_bytes(), score.as_bytes(), score.as_bytes()];
@@ -274,7 +275,7 @@ impl RedisSorted {
         Ok(None)
     }
 
-    pub async fn get(&self, key: &str) -> Result<Option<SetEntry>, RedisStoreError> {
+    pub async fn get(&self, key: &str) -> Result<Option<SetEntry>> {
         if let Ok((timestamp, jid)) = RedisSorted::decompose(key) {
             let elems = self.get_score(timestamp).await?;
 
@@ -303,7 +304,7 @@ impl RedisSorted {
         Ok(None)
     }
 
-    pub async fn find<F>(&self, m: &str, f: F) -> Result<(), RedisStoreError>
+    pub async fn find<F>(&self, m: &str, f: F) -> Result<()>
     where
         F: Fn((i32, SetEntry)),
     {
@@ -363,15 +364,14 @@ impl RedisSorted {
         Ok(())
     }
 
-    pub async fn page<F>(
+    pub async fn page(
         &self,
         start: i32,
         count: i32,
-        f: F,
-    ) -> Result<Option<i32>, RedisStoreError>
-    where
-        F: Fn((i32, SetEntry)),
+    ) -> Result<Option<(i32, Vec<SetEntry>)>>
     {
+        let mut entries = vec![];
+        
         if let Some(store) = self.store.upgrade() {
             let args = vec![
                 self.name(),
@@ -404,10 +404,9 @@ impl RedisSorted {
 
                 if let Some(job) = job {
                     if let Some(score) = score {
-                        f((
-                            counter,
+                        entries.push(
                             SetEntry::new(Bytes::copy_from_slice(job.as_bytes()), score),
-                        ));
+                        );
                     } else {
                         break;
                     }
@@ -421,35 +420,39 @@ impl RedisSorted {
                 }
             }
 
-            return Ok(Some(counter));
+            return Ok(Some((counter, entries)));
         }
 
         Ok(None)
     }
 
-    pub async fn each<F>(&self, f: F) -> Result<Option<i32>, RedisStoreError>
-    where
-        F: Fn((i32, SetEntry)) + Clone,
+    pub async fn each(&self) -> Result<Option<(i32, Vec<SetEntry>)>>
     {
         let count = 50;
         let mut current = 0;
+        let mut res = vec![];
 
         loop {
-            if let Some(size) = self.page(current, count, f.clone()).await? {
-                if size < count {
-                    return Ok(Some(current + size));
+            if let Some((size, entries)) = self.page(current, count).await? {
+                for entry in entries {
+                    res.push(entry);
                 }
+
+                if size < count {
+                    current += size;
+                    break;
+                }
+
+                current += count;
             } else {
                 break;
             }
-
-            current += count;
         }
 
-        Ok(None)
+        Ok(Some((current, res)))
     }
 
-    pub async fn rem(&self, times_f: f64, jid: String) -> Result<bool, RedisStoreError> {
+    pub async fn rem(&self, times_f: f64, jid: String) -> Result<bool> {
         if let Some(store) = self.store.upgrade() {
             let elems = self.get_score(times_f).await?;
 
@@ -493,7 +496,7 @@ impl RedisSorted {
         Ok(false)
     }
 
-    pub async fn remove(&self, key: &str) -> Result<bool, RedisStoreError> {
+    pub async fn remove(&self, key: &str) -> Result<bool> {
         if let Ok((timestamp, jid)) = RedisSorted::decompose(key) {
             if let Some(store) = self.store.upgrade() {
                 return self.rem(timestamp, jid).await;
@@ -503,7 +506,7 @@ impl RedisSorted {
         Ok(false)
     }
 
-    pub async fn remove_elem(&self, timestamp: &str, jid: &str) -> Result<bool, RedisStoreError> {
+    pub async fn remove_elem(&self, timestamp: &str, jid: &str) -> Result<bool> {
         if let Some(store) = self.store.upgrade() {
             let time = util::parse_time(timestamp);
             let time_f = time.timestamp_nanos() as f64 / 1000000000.0;
@@ -518,7 +521,7 @@ impl RedisSorted {
         timestamp: &str,
         max_count: i64,
         mut f: F,
-    ) -> Result<Option<i64>, RedisStoreError>
+    ) -> Result<Option<i64>>
     where
         F: FnMut(String, f64),
     {
@@ -591,7 +594,7 @@ impl RedisSorted {
         sorted_set: &RedisSorted,
         entry: &SetEntry,
         new_time: DateTime<Utc>,
-    ) -> Result<bool, RedisStoreError> {
+    ) -> Result<bool> {
         if let Some(store) = self.store.upgrade() {
             let job = entry.job()?;
             let args = vec![self.name(), String::from_utf8_lossy(entry.value()).into()];
@@ -630,7 +633,7 @@ impl SetEntry {
         &self.value
     }
 
-    pub fn key(&self) -> Result<String, RedisStoreError> {
+    pub fn key(&self) -> Result<String> {
         let secs = self.score as i64;
         let nsecs = ((self.score - secs as f64) * 1000000000.0) as u32;
         let datetime = NaiveDateTime::from_timestamp(secs, nsecs);
@@ -641,11 +644,11 @@ impl SetEntry {
         Ok(format!("{}|{}", st, job.jid))
     }
 
-    pub fn job(&self) -> Result<Job, RedisStoreError> {
+    pub fn job(&self) -> Result<Job> {
         Ok(Job::decode(&self.value)?)
     }
 
-    pub fn reservation<'a>(&self) -> Result<Reservation<'a>, RedisStoreError> {
+    pub fn reservation(&self) -> Result<Reservation> {
         Ok(Reservation::decode(&self.value).unwrap())
     }
 }
@@ -709,10 +712,17 @@ impl RedisStore {
         if let Some(queue) = inner.queue_set.remove(name) {
             let queue = f(queue).await;
             inner.queue_set.insert(name.into(), queue);
+            
+        } else {
+            drop(inner);
+            let queue = RedisQueue::new(name.into(), Arc::downgrade(&self.inner));
+            let queue = f(queue).await;
+            let mut inner = self.inner.write().await;
+            inner.queue_set.insert(name.into(), queue);
         }
     }
 
-    pub async fn flush(&self) -> Result<bool, RedisStoreError> {
+    pub async fn flush(&self) -> Result<bool> {
         let client = &self.inner.read().await.client;
         let r = client.execute::<i32, &[u8]>("FLUSHALL", None).await?;
 
@@ -722,8 +732,8 @@ impl RedisStore {
 
         Ok(false)
     }
-
-    async fn init_queue(&mut self) {
+    
+    pub async fn init_queue(&mut self) {
         let store = &mut *self.inner.write().await;
         store.scheduled = Some(RedisSorted {
             name: "scheduled".into(),

@@ -9,9 +9,13 @@ use serde_json::error::Error;
 pub struct Failure {
     retry_count: i32,
     failed_at: String,
+    #[serde(skip)]
     next_at: String,
+    #[serde(skip)]
     err_msg: String,
+    #[serde(skip)]
     err_type: String,
+    #[serde(skip)]
     backtrace: Vec<String>,
 }
 
@@ -20,19 +24,28 @@ pub struct Job {
     pub jid: String,
     pub queue: String,
     pub job_type: String,
-    pub args: Option<Vec<u8>>,
-    content: Option<Vec<u8>>,
-    result: Option<Vec<u8>>,
-
+    pub args: Option<Vec<String>>,
+    
+    result: Option<String>,
+    #[serde(skip)]
     pub created_at: Option<String>,
+    #[serde(skip)]
     pub enqueued_at: Option<String>,
+    #[serde(skip)]
     pub at: Option<String>,
+    #[serde(skip)]
     pub reserve_for: Option<i32>,
+    #[serde(skip)]
     pub retry: Option<i32>,
+    #[serde(skip)]
     backtrace: Option<i32>,
+    #[serde(skip)]
     failure: Option<Failure>,
+    #[serde(skip)]
     expired_at: Option<i32>,
+    #[serde(skip)]
     unique_for: Option<i32>,
+    #[serde(skip)]
     unique_until: Option<i32>,
 }
 
@@ -43,7 +56,6 @@ impl Default for Job {
             queue: "default".into(),
             args: None,
             jid: Self::random_jid(),
-            content: None,
             result: None,
             created_at: Some(Utc::now().to_rfc3339()),
             enqueued_at: None,
@@ -60,11 +72,10 @@ impl Default for Job {
 }
 
 impl Job {
-    pub fn new(job_type: &str, args: Vec<u8>, content: Vec<u8>) -> Job {
+    pub fn new(job_type: &str, args: Vec<String>) -> Job {
         Job {
             job_type: job_type.into(),
             args: Some(args),
-            content: Some(content),
             created_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()
         }

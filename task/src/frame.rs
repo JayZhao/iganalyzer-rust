@@ -8,8 +8,7 @@ use crate::command::COMMAND_SET;
 #[derive(Debug)]
 pub enum Error {
     Incomplete,
-    InvalidCmd,
-    Other(crate::Error),
+    InvalidCmd(String),
 }
 
 #[derive(Debug)]
@@ -26,7 +25,7 @@ impl Frame {
             return Ok(cmd);
         }
 
-        return Err(Error::InvalidCmd)
+        Err(Error::InvalidCmd(cmd.join(" ")))
 
     }
     
@@ -73,15 +72,9 @@ impl fmt::Display for Frame {
     }
 }
 
-impl From<String> for Error {
-    fn from(src: String) -> Error {
-        Error::Other(src.into())
-    }
-}
-
 impl From<&str> for Error {
     fn from(src: &str) -> Error {
-        src.to_string().into()
+        Error::InvalidCmd(src.into())
     }
 }
 
@@ -97,8 +90,7 @@ impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Incomplete => "stream ended early".fmt(fmt),
-            Error::InvalidCmd => "invalid command".fmt(fmt),
-            Error::Other(err) => err.fmt(fmt),
+            Error::InvalidCmd(s) => format!("invalid command: {:?}", s).fmt(fmt),
         }
     }
 }

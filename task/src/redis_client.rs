@@ -5,7 +5,8 @@ use bb8_redis::{
 };
 use url::Url;
 
-use crate::types::RedisStoreError;
+use crate::Result;
+use crate::types::TaskError;
 
 #[derive(Debug)]
 pub struct RedisClientConfig {
@@ -19,7 +20,7 @@ impl RedisClientConfig {
         RedisClientConfig { host, port, db }
     }
 
-    fn to_url(&self) -> Result<Url, RedisStoreError> {
+    fn to_url(&self) -> Result<Url> {
         Ok(Url::parse(&format!(
             "redis://{}:{}/{}",
             self.host, self.port, self.db
@@ -33,7 +34,7 @@ pub struct RedisClient {
 }
 
 impl RedisClient {
-    pub async fn new(config: RedisClientConfig) -> Result<RedisClient, RedisStoreError> {
+    pub async fn new(config: RedisClientConfig) -> Result<RedisClient> {
         let url = config.to_url()?;
         let manager = RedisConnectionManager::new(url)?;
         let pool = RedisPool::new(bb8::Pool::builder().build(manager).await?);
@@ -45,7 +46,7 @@ impl RedisClient {
         &self,
         command: &str,
         args: Option<&[V]>,
-    ) -> Result<T, RedisStoreError> {
+    ) -> Result<T> {
         let mut conn = self.pool.get().await?;
         let conn = conn.as_mut().unwrap();
         let mut query = cmd(command);
@@ -59,7 +60,7 @@ impl RedisClient {
         Ok(query.query_async(conn).await?)
     }
 
-    pub async fn info(&self) -> Result<String, RedisStoreError> {
+    pub async fn info(&self) -> Result<String> {
         let mut conn = self.pool.get().await?;
         let conn = conn.as_mut().unwrap();
         let query = cmd("info");

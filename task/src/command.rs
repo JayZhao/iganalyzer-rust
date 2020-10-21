@@ -12,6 +12,7 @@ use crate::server::ServerContext;
 use crate::server::Workers;
 use crate::frame::Error;
 use crate::store::RedisStore;
+use crate::manager::Manager;
 
 pub const COMMAND_SET: [&str; 11] = [
     "END", "PUSH", "FETCH", "ACK", "FAIL", "BEAT", "INFO", "FLUSH", "MUTATE", "BATCH", "TRACK",
@@ -32,19 +33,19 @@ async fn flush(store: &RedisStore) {
     store.flush().await;
 }
 
-async fn push(conn: &mut Connection, cmd: &str){
+async fn push(manager: Arc<RwLock<Manager>>, conn: &mut Connection, cmd: &str) {
+    info!("pushing............");
     match job::Job::decode(cmd.as_ref()) {
         Ok(mut job) => {
+            info!("{:?}", job);
             job.retry = Some(0); // default
             job.jid = job::Job::random_jid();
             job.created_at = Some(Utc::now().to_rfc3339());
             debug!("{:?}", job);
-            job
+            manager.write().await.push(job).await;
         },
         Err(e) => {
             error!("{:?}", e);
-
-            return 
         }
     };
 }                                   
@@ -98,11 +99,15 @@ async fn end(conn: &Connection) {
     conn.close();
 }
 
-pub async fn execute(server_context: Arc<RwLock<ServerContext>>, workers: Arc<RwLock<Workers>>, store: &RedisStore, conn: &mut Connection, cmd: Vec<&str>) {
+pub async fn execute(server_context: Arc<RwLock<ServerContext>>,
+                     manager: Arc<RwLock<Manager>>,
+                     workers: Arc<RwLock<Workers>>,
+                     store: &RedisStore,
+                     conn: &mut Connection, cmd: Vec<&str>) {
     match cmd[0] {
         "END" => end(conn).await,
         "PUSH" => {
-            push(conn, cmd[1]).await;
+            push(manager, conn, cmd[1]).await;
         },
         "FETCH" => fetch().await,
         "ACK" => ack().await,

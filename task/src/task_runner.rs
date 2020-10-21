@@ -134,13 +134,16 @@ impl<T> TaskRunner<T>
 }
 
 #[derive(Debug)]
-pub struct Scanner {
+pub struct Scanner<F>
+where F: std::future::Future<Output=i32> + Send + 'static
+{
     pub name: String,
     pub category: ScannerCategory,
     pub set: RedisSorted,
     pub jobs: AtomicI64,
     pub cycles: AtomicI64,
-    pub walltime: AtomicI64
+    pub walltime: AtomicI64,
+    pub runner: F
 }
 
 #[derive(Debug)]
@@ -150,13 +153,18 @@ pub enum ScannerCategory {
     Dead
 }
 
-impl Scanner {
-    pub fn new(name: String, category: ScannerCategory, set: RedisSorted) -> Scanner {
+impl<F> Scanner<F>
+where F: std::future::Future<Output=i32> + Send + 'static
+{
+    pub fn new(name: String, category: ScannerCategory, set: RedisSorted, f: F) -> Scanner<F>
+    {
         Scanner {
             name, set, category,
             jobs: AtomicI64::new(0),
             cycles: AtomicI64::new(0),
-            walltime: AtomicI64::new(0)
+            walltime: AtomicI64::new(0),
+            runner: f
+             
         }
     }
     
@@ -178,7 +186,9 @@ impl Scanner {
 }
 
 #[async_trait]
-impl Taskable for Scanner {
+impl<F> Taskable for Scanner<F>
+where F: std::future::Future<Output=i32> + Send + 'static
+{
 
     fn name(&self) -> &str {
         &self.name
@@ -187,7 +197,9 @@ impl Taskable for Scanner {
     async fn execute(&mut self) -> Result<()> {
         let start = Utc::now();
 
-        let count = self.task(start).await?;
+        // let count = self.task(start).await?;
+
+        let count = self.runner.await;
 
         if count > 0 {
             info!("{:?} processed {:?} jobs", self.name, count);
@@ -197,7 +209,7 @@ impl Taskable for Scanner {
         let dur = (end - start).num_nanoseconds().unwrap();
 
         self.cycles.fetch_add(1, Ordering::SeqCst);
-        self.jobs.fetch_add(count, Ordering::SeqCst);
+        self.jobs.fetch_add(count as i64, Ordering::SeqCst);
         self.walltime.fetch_add(dur, Ordering::SeqCst);
             
         Ok(())

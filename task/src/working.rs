@@ -6,35 +6,31 @@ use crate::client::job::Job;
 use crate::Result;
 
 #[async_trait]
-trait Lease<'a> {
+trait Lease {
     async fn relase(&self) -> Result<()>;
     async fn payload(&self) -> Result<Bytes>;
-    async fn job(&'a self) -> Result<&'a Job>;
 }
 
 #[derive(Debug)]
-struct SimpleLease<'a> {
+struct SimpleLease {
     payload: Bytes,
-    job: &'a Job,
+    job: Job,
     released: bool
 }
 
 #[async_trait]
-impl<'a> Lease<'a> for SimpleLease<'a> {
+impl Lease for SimpleLease {
     async fn relase(&self) -> Result<()> {
         Ok(())
     }
     async fn payload(&self) -> Result<Bytes> {
         Ok(Bytes::new())
     }
-    async fn job(&'a self) -> Result<&'a Job> {
-        Ok(self.job)
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Reservation<'a> {
-    job: Job,
+pub struct Reservation {
+    pub job: Job,
     since: String,
     expiry: String,
     wid: String,
@@ -47,20 +43,17 @@ pub struct Reservation<'a> {
 
     #[serde(skip)]
     extension: Option<DateTime<Utc>>,
-
-    #[serde(skip)]
-    lease: Option<SimpleLease<'a>>
 }
 
 
-impl<'a> Reservation<'a> {
+impl Reservation {
     pub fn encode(&self) -> Result<Bytes> {
         Ok(Bytes::copy_from_slice(
-            serde_json::to_string(self).unwrap().as_bytes(),
+            serde_json::to_string(self)?.as_bytes(),
         ))
     }
     
-    pub fn decode(buf: &[u8]) -> Result<Reservation<'a>> {
-        Ok(serde_json::from_str(&String::from_utf8_lossy(buf)).unwrap())
+    pub fn decode(buf: &[u8]) -> Result<Reservation> {
+        Ok(serde_json::from_str(&String::from_utf8_lossy(buf))?)
     }
 }

@@ -6,30 +6,44 @@ use crate::store::RedisStore;
 use crate::store::RedisSorted;
 use crate::client::job::Job;
 use crate::working::Reservation;
+use crate::Result;
 
-pub struct Manager<'a> {
+#[derive(Debug)]
+pub struct Manager {
     store: RedisStore,
-    working_map: HashMap<String, Reservation<'a>>
+    working_map: HashMap<String, Reservation>
 }
 
 
-impl<'a> Manager<'a> {
-    pub fn new(store: RedisStore) -> Manager<'a> {
+impl Manager {
+    pub fn new(store: RedisStore) -> Manager {
         Manager {
             store,
             working_map: HashMap::new()
         }
     }
 
-    pub async fn load_working_set(&self) {
+    pub async fn load_working_set(&mut self) -> Result<()> {
         if let Some(working) = self.store.get_working().await {
-            working.each(|(score, entry)| {
-                let res = entry.reservation();
-            });
+            if let Ok(Some((counter, entries))) = working.each().await {
+                info!("Loading {} working jobs", counter);
+                for entry in entries {
+                    match entry.reservation() {
+                        Ok(r) => {
+                            self.working_map.insert(r.job.jid.to_string(), r);
+                        },
+                        Err(e) => {
+                            error!("Failed loading {:?} job, {:?}", entry, e);
+                        }
+                    }
+                }
+            }
         }
+
+        Ok(())
     }
     
-    async fn push(&self, mut job: Job) {
+    pub async fn push(&self, mut job: Job) {
         if job.jid == "" || job.jid.len() < 8 {
             error!("All jobs must have a reasonable jid parameter");
         }
@@ -71,16 +85,16 @@ impl<'a> Manager<'a> {
                                 }
                             }
 
-                        } else {
-                            self.enqueue(job).await;
                         }
                     },
-
                     Err(_e) => {
                         error!("Invalid timestamp {:?}", at);
                     }
                 }
             }
+        } else {
+            info!("+++++++++++++++++++++++++++===");
+            self.enqueue(job).await;
         }
     }
 
@@ -103,8 +117,9 @@ impl<'a> Manager<'a> {
         self.store.fetch_queue_then(&job.queue.clone(), |mut queue| {
             async move {
                 job.enqueued_at = Some(Utc::now().to_rfc3339());
-
+                
                 if let Ok(job) = Job::encode(&job) {
+                    info!("job {:?}", job);
                     if let Err(e) = queue.push(job.as_ref()).await {
                         error!("Job cannot be pushed into the queue, {:?}", e);
                     }

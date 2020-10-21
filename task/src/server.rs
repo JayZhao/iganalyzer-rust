@@ -56,6 +56,7 @@ pub struct ServerOpts {
 #[derive(Debug)]
 pub struct Server {
     opts: ServerOpts,
+    manager: Arc<RwLock<Manager>>,
     store: RedisStore,
     listener: TcpListener,
     workers: Arc<RwLock<Workers>>,
@@ -70,6 +71,7 @@ pub struct Server {
 pub (crate) struct Handler {
     store: RedisStore,
     connection: Connection,
+    manager:  Arc<RwLock<Manager>>,
     server_context: Arc<RwLock<ServerContext>>,
     workers: Arc<RwLock<Workers>>,
     limit_connections: Arc<Semaphore>,
@@ -84,6 +86,7 @@ pub enum WorkerState {
     Terminate
 }
 
+// {"hostname":"127.0.0.1","wid":"test","pid":10000,"labels":["test"]}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ClientData {
     hostname: String,
@@ -224,22 +227,26 @@ pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> 
     }));
     
     let mut task_runner = TaskRunner::<Scanner>::new(Shutdown::new(notify_shutdown.subscribe()));
-    let scheduled_scanner = Scanner::new("scheduled".into(), ScannerCategory::Scheduled,store.get_scheduled().await.unwrap());
-    let retries_scanner = Scanner::new("retries".into(), ScannerCategory::Retry,store.get_retries().await.unwrap());
-    let dead_scanner = Scanner::new("dead".into(), ScannerCategory::Dead,store.get_dead().await.unwrap());
+    let scheduled_scanner = Scanner::new("scheduled".into(), ScannerCategory::Scheduled,store.get_scheduled().await.unwrap(), async move {1});
+    let retries_scanner = Scanner::new("retries".into(), ScannerCategory::Retry,store.get_retries().await.unwrap(), async move {1});
+    let dead_scanner = Scanner::new("dead".into(), ScannerCategory::Dead,store.get_dead().await.unwrap(), async move {1});
     task_runner.add_task(5, scheduled_scanner).await;
     task_runner.add_task(5, retries_scanner).await;
     task_runner.add_task(60, dead_scanner).await;
 
     TaskRunner::run(task_runner).await;
 
+    let manager = Arc::new(RwLock::new(Manager::new(store.clone())));
 
-    let manager = Manager::new(store.clone());
+    let mut man = manager.write().await;
+    man.load_working_set().await;
+    drop(man);
     
     let mut server = Server {
         opts,
         context,
         workers,
+        manager,
         listener,
         store,
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
@@ -333,6 +340,7 @@ impl Server {
             let mut handler = Handler {
                 store: self.store.clone(),
                 connection: conn,
+                manager: Arc::clone(&self.manager),
                 server_context: Arc::clone(&self.context),
                 workers: Arc::clone(&self.workers),
                 limit_connections: self.limit_connections.clone(),
@@ -366,7 +374,12 @@ impl Handler {
                                     let mut context = self.server_context.write().await;
                                     context.add_cmd();
                                     drop(context);
-                                    execute(Arc::clone(&self.server_context), Arc::clone(&self.workers), &self.store, &mut self.connection, cmd).await;
+                                    execute(
+                                        Arc::clone(&self.server_context),
+                                        Arc::clone(&self.manager),
+                                        Arc::clone(&self.workers),
+                                        &self.store,
+                                        &mut self.connection, cmd).await;
                                 },
                                 Err(e) => {
                                     self.connection.send_err(e.into()).await?;

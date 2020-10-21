@@ -1,6 +1,7 @@
 #![feature(str_split_once)]
 use tokio::signal;
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
+use crate::types::TaskError;
+pub type Error = Box<TaskError>;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -26,11 +27,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let client = redis_client::RedisClient::new(config).await?;
 
-    let store = store::RedisStore::new("core".into(), client).await;
+    let mut store = store::RedisStore::new("core".into(), client).await;
 
-    let mut job = client::job::Job::new("test", Vec::new(), Vec::new());
+    store.init_queue().await;
 
-    job.at = Some(util::utc_now());
+    // let mut job = client::job::Job::new("test", Vec::new(), Vec::new());
+    
+    // job.at = Some(util::utc_now());
 
     server::run(
         server::ServerOpts {

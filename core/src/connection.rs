@@ -2,8 +2,8 @@ use bytes::{Buf, BytesMut};
 use std::io::{self, Cursor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
-use tokio_util::codec::Framed;
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
+use tokio_util::codec::Framed;
 
 const HEADER_LEN: usize = 4;
 
@@ -20,8 +20,6 @@ impl Connection {
             .new_codec();
         let framed = Framed::new(socket, codec);
 
-        Connection {
-            framed
-         }
+        Connection { framed }
     }
 }

@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, error, info, instrument};
 use tokio::time::{self, Duration};
+use tracing::{debug, error, info, instrument};
 
 use crate::connection::Connection;
 
 #[derive(Debug)]
 struct Listener {
     listener: TcpListener,
-
 }
 
 #[derive(Debug)]
@@ -17,10 +16,8 @@ struct Handler {
 }
 
 pub async fn run(listener: TcpListener) -> crate::Result<()> {
-
     Ok(())
 }
-
 
 impl Listener {
     async fn run(&mut self) -> crate::Result<()> {
@@ -30,7 +27,7 @@ impl Listener {
             let socket = self.accept().await?;
 
             let mut handler = Handler {
-                connection: Connection::new(socket)
+                connection: Connection::new(socket),
             };
 
             tokio::spawn(async move {
@@ -64,7 +61,6 @@ impl Listener {
 impl Handler {
     #[instrument(skip(self))]
     async fn run(&mut self) -> crate::Result<()> {
-
         Ok(())
     }
 }

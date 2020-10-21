@@ -12,6 +12,8 @@ use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
 use tokio::sync::RwLock;
 
+use crate::types::TaskError;
+
 #[derive(Debug)]
 pub struct Connection {
     stream: BufWriter<TcpStream>,
@@ -57,7 +59,7 @@ impl Connection {
                 if self.buffer.is_empty() {
                     return Ok(None);
                 } else {
-                    return Err("connection reset by peer".into());
+                    return Err(Box::new(TaskError::IoError("connection reset by peer".into())));
                 }
             }
         }
@@ -74,8 +76,8 @@ impl Connection {
         loop {
             tokio::select! {
                 _ = &mut delay => {
-                    self.send_err("Handshake timeout".into()).await?;
-                    return Err("Handshake timeout".into());
+                    self.send_err(Box::new(TaskError::IoError("Handshake timeout".into()))).await?;
+                    return Err(Box::new(TaskError::IoError("Handshake timeout".into())));
                 },
                 r = self.start() => {
                     match r {
@@ -83,7 +85,7 @@ impl Connection {
                             return Ok(client_data)
                         },
                         Err(e) => {
-                            self.send_err(e.to_string().into()).await?;
+                            self.send_err(Box::new(TaskError::IoError(e.to_string().into()))).await?;
                             return Err(e);
                         }
                     }
@@ -148,24 +150,26 @@ impl Connection {
             Ok(Some(frame)) => {
                 if let Some((cmd, payload)) = frame.to_string()?.split_once(' ') {
                     if cmd == "HELLO" {
+                        info!("{:?}", payload);
                         let data = match ClientData::decode(payload.as_bytes()) {
                             Ok(data) => data,
                             Err(e) => {
-                                return Err("Handshake failed, invalid client data".into());
+                                error!("{:?}", e);
+                                return Err(Box::new(TaskError::IoError("Handshake failed, invalid client data".into())));
                             }
                         };
                         self.say_ok().await?;
 
                         return Ok(data);
                     } else {
-                        return Err("Handshake failed, invalid client data".into());
+                        return Err(Box::new(TaskError::IoError("Handshake failed, invalid client data".into())));
                     }
                 } else {
-                    return Err("Handshake failed".into());
+                    return Err(Box::new(TaskError::IoError("Handshake failed".into())));
                 }
             }
 
-            Ok(None) => return Err("Invalid connection".into()),
+            Ok(None) => return Err(Box::new(TaskError::IoError("Invalid connection".into()))),
             Err(e) => return Err(e.into()),
         }
     }
