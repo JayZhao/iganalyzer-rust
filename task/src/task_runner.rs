@@ -1,19 +1,21 @@
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use async_trait::async_trait;
-use chrono::{Utc, DateTime};
+use chrono::{DateTime, Utc};
 use log::*;
-use std::time::Duration;
-use tokio::sync::broadcast;
+use std::collections::HashMap;
 use std::fmt;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast::Sender;
+use tokio::sync::RwLock;
 
+use crate::manager::Manager;
+use crate::server::Workers;
 use crate::shutdown::Shutdown;
-use crate::Error;
-use crate::Result;
 use crate::store::RedisSorted;
+use crate::util;
+use crate::Result;
 
 #[async_trait]
 pub trait Taskable {
@@ -23,25 +25,34 @@ pub trait Taskable {
 }
 
 #[derive(Debug)]
-struct Task<T> where T: Taskable + Send + Unpin + Sized {
+struct Task<T>
+where
+    T: Taskable + Send + Unpin + Sized,
+{
     runner: Pin<Box<T>>,
     every: AtomicI64,
     runs: AtomicI64,
-    walltime_ns: AtomicI64
+    walltime_ns: AtomicI64,
 }
 
-impl<T> Task<T> where T: Taskable + Send + Unpin + Sized {
+impl<T> Task<T>
+where
+    T: Taskable + Send + Unpin + Sized,
+{
     fn new(runner: Pin<Box<T>>, every: AtomicI64) -> Task<T> {
         Task {
-            runner, every, runs: AtomicI64::new(0),
-            walltime_ns: AtomicI64::new(0)
+            runner,
+            every,
+            runs: AtomicI64::new(0),
+            walltime_ns: AtomicI64::new(0),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct TaskRunner<T>
-    where T: Taskable + Send + Unpin + Sized
+where
+    T: Taskable + Send + Unpin + Sized,
 {
     tasks: Vec<Task<T>>,
     walltime_ns: AtomicI64,
@@ -51,16 +62,21 @@ pub struct TaskRunner<T>
 }
 
 impl<T> fmt::Display for TaskRunner<T>
-    where T: Taskable + Send + Unpin + Sized
+where
+    T: Taskable + Send + Unpin + Sized,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "Runner: walltime_ns: {:?}, cycles: {:?}, executions: {:?}", self.walltime_ns, self.cycles, self.executions)
+        write!(
+            formatter,
+            "Runner: walltime_ns: {:?}, cycles: {:?}, executions: {:?}",
+            self.walltime_ns, self.cycles, self.executions
+        )
     }
 }
 
-
 impl<T> TaskRunner<T>
-    where T: Taskable + Send + Unpin + Sized + 'static
+where
+    T: Taskable + Send + Unpin + Sized + 'static,
 {
     pub fn new(shutdown: Shutdown) -> TaskRunner<T> {
         TaskRunner {
@@ -68,7 +84,7 @@ impl<T> TaskRunner<T>
             walltime_ns: AtomicI64::new(0),
             cycles: AtomicI64::new(0),
             executions: AtomicI64::new(0),
-            shutdown
+            shutdown,
         }
     }
 
@@ -77,8 +93,7 @@ impl<T> TaskRunner<T>
         self.tasks.push(task);
     }
 
-    pub async fn run(mut runner: TaskRunner<T>)
-    {
+    pub async fn run(mut runner: TaskRunner<T>) {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -120,8 +135,7 @@ impl<T> TaskRunner<T>
 
             task.runs.fetch_add(1, Ordering::SeqCst);
             task.walltime_ns.fetch_add(td, Ordering::SeqCst);
-            count = count + 1;
-
+            count += 1;
         }
 
         let end = Utc::now();
@@ -129,56 +143,82 @@ impl<T> TaskRunner<T>
         self.cycles.fetch_add(1, Ordering::SeqCst);
         self.executions.fetch_add(count, Ordering::SeqCst);
         self.walltime_ns.fetch_add(d, Ordering::SeqCst);
-        
     }
 }
 
 #[derive(Debug)]
-pub struct Scanner<F>
-where F: std::future::Future<Output=i32> + Send + 'static
-{
+pub struct Scanner {
     pub name: String,
     pub category: ScannerCategory,
     pub set: RedisSorted,
     pub jobs: AtomicI64,
     pub cycles: AtomicI64,
     pub walltime: AtomicI64,
-    pub runner: F
+    pub manager: Arc<RwLock<Manager>>,
+    pub workers: Arc<RwLock<Workers>>,
+    pub notify_reap: Option<Sender<String>>,
 }
 
 #[derive(Debug)]
 pub enum ScannerCategory {
     Scheduled,
     Retry,
-    Dead
+    Dead,
+    ReapConn,
 }
 
-impl<F> Scanner<F>
-where F: std::future::Future<Output=i32> + Send + 'static
-{
-    pub fn new(name: String, category: ScannerCategory, set: RedisSorted, f: F) -> Scanner<F>
-    {
+impl Scanner {
+    pub fn new(
+        name: String,
+        category: ScannerCategory,
+        set: RedisSorted,
+        manager: Arc<RwLock<Manager>>,
+        workers: Arc<RwLock<Workers>>,
+        notify_reap: Option<Sender<String>>,
+    ) -> Scanner {
         Scanner {
-            name, set, category,
+            name,
+            set,
+            category,
+            manager,
+            workers,
             jobs: AtomicI64::new(0),
             cycles: AtomicI64::new(0),
             walltime: AtomicI64::new(0),
-            runner: f
-             
+            notify_reap,
         }
     }
-    
-    async fn task(&self, time: DateTime<Utc>) -> Result<i64> {
 
+    async fn task(&mut self, time: DateTime<Utc>) -> Result<i64> {
+        let stime = util::format_time(time);
         match self.category {
             ScannerCategory::Scheduled => {
-                info!("S");
-            },
+                let manager = self.manager.read().await;
+                info!("Scheduled");
+                manager.schedule(&stime).await;
+            }
             ScannerCategory::Retry => {
-                info!("R");
-            },
+                let manager = self.manager.read().await;
+                info!("Retry");
+                manager.retry(&stime).await;
+            }
             ScannerCategory::Dead => {
-                info!("D");
+                let manager = self.manager.read().await;
+                info!("Dead");
+                manager.purge(&stime).await;
+            }
+            ScannerCategory::ReapConn => {
+                info!("Reap");
+                let mut workers = self.workers.write().await;
+                let wids = workers.reap_heartbeats().await;
+
+                if let Some(notify) = self.notify_reap.as_mut() {
+                    for wid in wids {
+                        if let Err(e) = notify.send(wid) {
+                            error!("Reap connection error: {:?}", e);
+                        }
+                    }
+                }
             }
         }
         Ok(0)
@@ -186,10 +226,7 @@ where F: std::future::Future<Output=i32> + Send + 'static
 }
 
 #[async_trait]
-impl<F> Taskable for Scanner<F>
-where F: std::future::Future<Output=i32> + Send + 'static
-{
-
+impl Taskable for Scanner {
     fn name(&self) -> &str {
         &self.name
     }
@@ -197,9 +234,7 @@ where F: std::future::Future<Output=i32> + Send + 'static
     async fn execute(&mut self) -> Result<()> {
         let start = Utc::now();
 
-        // let count = self.task(start).await?;
-
-        let count = self.runner.await;
+        let count = self.task(start).await?;
 
         if count > 0 {
             info!("{:?} processed {:?} jobs", self.name, count);
@@ -211,20 +246,26 @@ where F: std::future::Future<Output=i32> + Send + 'static
         self.cycles.fetch_add(1, Ordering::SeqCst);
         self.jobs.fetch_add(count as i64, Ordering::SeqCst);
         self.walltime.fetch_add(dur, Ordering::SeqCst);
-            
+
         Ok(())
     }
 
     async fn stats(&self) -> Result<HashMap<String, String>> {
         let mut res = HashMap::new();
 
-        res.insert("enqueued".into(), self.jobs.load(Ordering::Relaxed).to_string());
-        res.insert("cycles".into(), self.cycles.load(Ordering::Relaxed).to_string());
+        res.insert(
+            "enqueued".into(),
+            self.jobs.load(Ordering::Relaxed).to_string(),
+        );
+        res.insert(
+            "cycles".into(),
+            self.cycles.load(Ordering::Relaxed).to_string(),
+        );
 
         match self.set.size().await {
             Ok(Some(size)) => {
                 res.insert("size".into(), size.to_string());
-            },
+            }
             Ok(None) => {
                 error!("empty queue: {:?}", self.name);
             }
@@ -232,8 +273,11 @@ where F: std::future::Future<Output=i32> + Send + 'static
                 error!("cannot fetch queue size: {:?}", e);
             }
         }
-        
-        res.insert("wall_time_sec".into(), (self.walltime.load(Ordering::Relaxed) as f64 / 1000_000_000.0).to_string());
+
+        res.insert(
+            "wall_time_sec".into(),
+            (self.walltime.load(Ordering::Relaxed) as f64 / 1000_000_000.0).to_string(),
+        );
 
         Ok(res)
     }

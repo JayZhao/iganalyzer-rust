@@ -40,7 +40,7 @@ impl Error for TaskError {}
 impl From<std::io::Error> for Box<TaskError> {
     fn from(io_err: std::io::Error) -> Box<TaskError> {
         let fmt = format!("{}", io_err);
-        
+
         Box::new(TaskError::IoError(fmt))
     }
 }
@@ -48,7 +48,7 @@ impl From<std::io::Error> for Box<TaskError> {
 impl From<ParseError> for Box<TaskError> {
     fn from(parse_err: ParseError) -> Box<TaskError> {
         let fmt = format!("{}", parse_err);
-        
+
         Box::new(TaskError::InvalidUrl(fmt))
     }
 }
@@ -64,7 +64,7 @@ impl From<ParseFloatError> for Box<TaskError> {
 impl From<serde_json::error::Error> for Box<TaskError> {
     fn from(parse_err: serde_json::error::Error) -> Box<TaskError> {
         let fmt = format!("{}", parse_err);
-        
+
         Box::new(TaskError::JsonInvalid(fmt))
     }
 }
@@ -75,7 +75,7 @@ where
 {
     fn from(bb8_err: RunError<E>) -> Box<TaskError> {
         let fmt = format!("{}", bb8_err);
-        
+
         Box::new(TaskError::Bb8Err(fmt))
     }
 }
@@ -88,7 +88,6 @@ impl From<RedisError> for Box<TaskError> {
     }
 }
 
-
 impl From<frame::Error> for Box<TaskError> {
     fn from(frame_err: frame::Error) -> Box<TaskError> {
         let fmt = format!("{}", frame_err);
@@ -96,4 +95,3 @@ impl From<frame::Error> for Box<TaskError> {
         Box::new(TaskError::IoError(fmt))
     }
 }
-

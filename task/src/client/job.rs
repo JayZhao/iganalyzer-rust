@@ -25,7 +25,7 @@ pub struct Job {
     pub queue: String,
     pub job_type: String,
     pub args: Option<Vec<String>>,
-    
+
     result: Option<String>,
     #[serde(skip)]
     pub created_at: Option<String>,

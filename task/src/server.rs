@@ -1,32 +1,31 @@
-use tokio::net::{TcpListener, TcpStream};
-use std::sync::atomic::{Ordering, AtomicI64};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use log::*;
+use serde::{Deserialize, Serialize};
+use serde_json::error::Error;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
-use log::*;
-use tokio::sync::RwLock;
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
-use serde_json::error::Error;
-use bytes::Bytes;
 
-use crate::store::RedisStore;
-use crate::connection::Connection;
 use crate::command::execute;
-use crate::shutdown::Shutdown;
 use crate::command::ClientBeat;
-use crate::task_runner::TaskRunner;
-use crate::task_runner::ScannerCategory;
-use crate::task_runner::Scanner;
+use crate::connection::Connection;
 use crate::manager::Manager;
+use crate::shutdown::Shutdown;
+use crate::store::RedisStore;
+use crate::task_runner::Scanner;
+use crate::task_runner::ScannerCategory;
+use crate::task_runner::TaskRunner;
 
 #[derive(Debug)]
 pub struct ServerContext {
     pub connections: u64,
     pub cmds: u128,
-    pub started_at: DateTime<Utc>
+    pub started_at: DateTime<Utc>,
 }
 
 impl ServerContext {
@@ -43,7 +42,7 @@ impl ServerContext {
     }
 
     pub fn uptime(&self) -> i64 {
-        Utc::now().timestamp() - self.started_at.timestamp() 
+        Utc::now().timestamp() - self.started_at.timestamp()
     }
 }
 
@@ -62,20 +61,22 @@ pub struct Server {
     workers: Arc<RwLock<Workers>>,
     context: Arc<RwLock<ServerContext>>,
     limit_connections: Arc<Semaphore>,
-    notify_shutdown: broadcast::Sender<()>,
+    notify_shutdown: broadcast::Sender<String>,
+    notify_reap: broadcast::Sender<String>,
     shutdown_complete_rx: mpsc::Receiver<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
 }
 
 #[derive(Debug)]
-pub (crate) struct Handler {
+pub(crate) struct Handler {
     store: RedisStore,
     connection: Connection,
-    manager:  Arc<RwLock<Manager>>,
+    manager: Arc<RwLock<Manager>>,
     server_context: Arc<RwLock<ServerContext>>,
     workers: Arc<RwLock<Workers>>,
     limit_connections: Arc<Semaphore>,
     shutdown: Shutdown,
+    reap_shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
 }
 
@@ -83,7 +84,7 @@ pub (crate) struct Handler {
 pub enum WorkerState {
     Running,
     Quit,
-    Terminate
+    Terminate,
 }
 
 // {"hostname":"127.0.0.1","wid":"test","pid":10000,"labels":["test"]}
@@ -93,15 +94,16 @@ pub struct ClientData {
     wid: Option<String>,
     pid: i64,
     labels: Option<Vec<String>>,
-    started_at: Option<i64>, //timestmap
+    started_at: Option<i64>,     //timestmap
     last_heartbeat: Option<i64>, // timestamp
     state: Option<WorkerState>,
 }
 
-
 impl ClientData {
     pub fn encode(&self) -> Result<Bytes, Error> {
-        Ok(Bytes::copy_from_slice(serde_json::to_string(self)?.as_bytes()))
+        Ok(Bytes::copy_from_slice(
+            serde_json::to_string(self)?.as_bytes(),
+        ))
     }
 
     pub fn decode(buf: &[u8]) -> Result<ClientData, Error> {
@@ -140,26 +142,24 @@ impl ClientData {
             return state != &WorkerState::Running;
         }
 
-        return false;
+        false
     }
 
     pub fn is_consumer(&self) -> bool {
-        return self.wid.is_some();
+        self.wid.is_some()
     }
 }
 
 #[derive(Debug)]
 pub struct Workers {
-    heartbeats: HashMap<String, ClientData>
+    heartbeats: HashMap<String, ClientData>,
 }
 
 impl Workers {
     fn new() -> Workers {
-        Workers { heartbeats: HashMap::new() }
-    }
-
-    fn count(&self) -> usize {
-        self.heartbeats.len()
+        Workers {
+            heartbeats: HashMap::new(),
+        }
     }
 
     async fn setup_heartbeats(&mut self, client_data: ClientData) {
@@ -168,7 +168,7 @@ impl Workers {
                 if self.heartbeats.get(wid).is_none() {
                     self.heartbeats.insert(wid.clone(), client_data);
                 }
-            },
+            }
             None => {
                 error!("not a worker");
             }
@@ -180,8 +180,9 @@ impl Workers {
             cl.last_heartbeat = Some(Utc::now().timestamp());
 
             if let Some(new_state) = client_beat.current_state {
-                if let Some(old_state)  = &cl.state {
-                    info!("{:?} {:?}", new_state, old_state);
+                if let Some(old_state) = &cl.state {
+                    debug!("{:?} {:?}", new_state, old_state);
+
                     if new_state != *old_state {
                         cl.signal(new_state);
                     }
@@ -190,58 +191,97 @@ impl Workers {
         }
     }
 
-    async fn remove_connection(&mut self, conn: &Connection) {
+    pub async fn remove_connection(&mut self, conn: &Connection) {
         if let Some(ref wid) = conn.wid {
             self.heartbeats.remove(wid);
         }
     }
 
-    async fn reap_heartbeats(&mut self, time: i64) {
+    pub async fn reap_heartbeats(&mut self) -> Vec<String> {
         let mut wids = vec![];
-        for (wid, hb) in &self.heartbeats  {
+        let time = (Utc::now() - chrono::Duration::minutes(1)).timestamp();
+        for (wid, hb) in &self.heartbeats {
             if let Some(last_heartbeats) = hb.last_heartbeat {
+                debug!("wid: {:?}, hearbeats: {:?},  time: {:?}", wid, last_heartbeats, time);
                 if last_heartbeats < time {
                     wids.push(wid.to_string());
                 }
             }
         }
 
-        for wid in wids {
-            self.heartbeats.remove(&wid);
+        for wid in &wids {
+            self.heartbeats.remove(wid);
         }
-    }
 
+        wids
+    }
 }
 
 const MAX_CONNECTIONS: usize = 2000;
 
-pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> crate::Result<()> {
     let (notify_shutdown, _) = broadcast::channel(1);
+    let (notify_reap, _) = broadcast::channel(MAX_CONNECTIONS);
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
     let listener = TcpListener::bind(format!("{}:{}", opts.bind_host, opts.bind_port)).await?;
     let workers = Arc::new(RwLock::new(Workers::new()));
     let context = Arc::new(RwLock::new(ServerContext {
         connections: 0,
         started_at: Utc::now(),
-        cmds: 0
+        cmds: 0,
     }));
-    
-    let mut task_runner = TaskRunner::<Scanner>::new(Shutdown::new(notify_shutdown.subscribe()));
-    let scheduled_scanner = Scanner::new("scheduled".into(), ScannerCategory::Scheduled,store.get_scheduled().await.unwrap(), async move {1});
-    let retries_scanner = Scanner::new("retries".into(), ScannerCategory::Retry,store.get_retries().await.unwrap(), async move {1});
-    let dead_scanner = Scanner::new("dead".into(), ScannerCategory::Dead,store.get_dead().await.unwrap(), async move {1});
+
+    let manager = Arc::new(RwLock::new(Manager::new(store.clone())));
+
+    let mut task_runner =
+        TaskRunner::<Scanner>::new(Shutdown::new(notify_shutdown.subscribe(), None));
+    let scheduled_scanner = Scanner::new(
+        "scheduled".into(),
+        ScannerCategory::Scheduled,
+        store.get_scheduled().await.unwrap(),
+        manager.clone(),
+        workers.clone(),
+        None,
+    );
+    let retries_scanner = Scanner::new(
+        "retries".into(),
+        ScannerCategory::Retry,
+        store.get_retries().await.unwrap(),
+        manager.clone(),
+        workers.clone(),
+        None,
+    );
+    let dead_scanner = Scanner::new(
+        "dead".into(),
+        ScannerCategory::Dead,
+        store.get_dead().await.unwrap(),
+        manager.clone(),
+        workers.clone(),
+        None,
+    );
+
+    let worker_scanner = Scanner::new(
+        "workers".into(),
+        ScannerCategory::ReapConn,
+        store.get_dead().await.unwrap(),
+        manager.clone(),
+        workers.clone(),
+        Some(notify_reap.clone()),
+    );
+
     task_runner.add_task(5, scheduled_scanner).await;
     task_runner.add_task(5, retries_scanner).await;
     task_runner.add_task(60, dead_scanner).await;
+    task_runner.add_task(2, worker_scanner).await;
 
     TaskRunner::run(task_runner).await;
 
     let manager = Arc::new(RwLock::new(Manager::new(store.clone())));
 
     let mut man = manager.write().await;
-    man.load_working_set().await;
+    man.load_working_set().await?;
     drop(man);
-    
+
     let mut server = Server {
         opts,
         context,
@@ -251,6 +291,7 @@ pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> 
         store,
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         notify_shutdown,
+        notify_reap,
         shutdown_complete_tx,
         shutdown_complete_rx,
     };
@@ -270,9 +311,11 @@ pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> 
         mut shutdown_complete_rx,
         shutdown_complete_tx,
         notify_shutdown,
+        notify_reap,
         ..
     } = server;
     drop(notify_shutdown);
+    drop(notify_reap);
     drop(shutdown_complete_tx);
 
     let _ = shutdown_complete_rx.recv().await;
@@ -311,11 +354,14 @@ impl Server {
     pub async fn current_state(&self) -> HashMap<String, String> {
         let mut state = HashMap::new();
 
-        state.insert("server_utc_time".into(), format!("{}", Utc::now().timestamp()));
+        state.insert(
+            "server_utc_time".into(),
+            format!("{}", Utc::now().timestamp()),
+        );
 
         state
     }
-    
+
     async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             self.limit_connections.acquire().await.forget();
@@ -330,13 +376,15 @@ impl Server {
                     self.setup_heartbeats(client_data).await;
                     let mut context = self.context.write().await;
                     context.add_connection();
-                },
+                }
                 Err(_e) => {
                     drop(conn);
                     continue;
                 }
             };
 
+            let wid = conn.get_wid();
+            
             let mut handler = Handler {
                 store: self.store.clone(),
                 connection: conn,
@@ -344,7 +392,8 @@ impl Server {
                 server_context: Arc::clone(&self.context),
                 workers: Arc::clone(&self.workers),
                 limit_connections: self.limit_connections.clone(),
-                shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
+                shutdown: Shutdown::new(self.notify_shutdown.subscribe(), None),
+                reap_shutdown: Shutdown::new(self.notify_reap.subscribe(), wid),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
             };
 
@@ -362,8 +411,8 @@ impl Server {
 
 impl Handler {
     async fn run(&mut self) -> crate::Result<()> {
-        while !self.shutdown.is_shutdown() {
-            let r = tokio::select! {
+        while !self.shutdown.is_shutdown() && !self.reap_shutdown.is_shutdown() {
+            tokio::select! {
                 frame = self.connection.read_frame() => {
                     match frame? {
                         Some(frame) => {
@@ -374,14 +423,17 @@ impl Handler {
                                     let mut context = self.server_context.write().await;
                                     context.add_cmd();
                                     drop(context);
-                                    execute(
+                                    if let Err(e) = execute(
                                         Arc::clone(&self.server_context),
                                         Arc::clone(&self.manager),
                                         Arc::clone(&self.workers),
                                         &self.store,
-                                        &mut self.connection, cmd).await;
+                                        &mut self.connection, cmd).await {
+                                        error!("Error: {:?}", e);
+                                    }
                                 },
                                 Err(e) => {
+                                    error!("Frame Error: {:?}", e);
                                     self.connection.send_err(e.into()).await?;
                                 }
                             }
@@ -392,7 +444,12 @@ impl Handler {
                         }
                     }
                 },
+                _ = self.reap_shutdown.recv() => {
+                    debug!("Connection recv reap signal!");
+                    continue;
+                },
                 _ = self.shutdown.recv() => {
+                    debug!("Connection recv shutdown signal!");
                     return Ok(());
                 }
             };

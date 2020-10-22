@@ -1,6 +1,6 @@
 #![feature(str_split_once)]
-use tokio::signal;
 use crate::types::TaskError;
+use tokio::signal;
 pub type Error = Box<TaskError>;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -9,14 +9,14 @@ pub mod client;
 pub mod command;
 pub mod connection;
 pub mod frame;
+pub mod manager;
 pub mod redis_client;
 pub mod server;
 pub mod shutdown;
 pub mod store;
+pub mod task_runner;
 pub mod types;
 pub mod util;
-pub mod task_runner;
-pub mod manager;
 pub mod working;
 
 #[tokio::main]
@@ -32,7 +32,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     store.init_queue().await;
 
     // let mut job = client::job::Job::new("test", Vec::new(), Vec::new());
-    
+
     // job.at = Some(util::utc_now());
 
     server::run(

@@ -6,7 +6,6 @@ use bb8_redis::{
 use url::Url;
 
 use crate::Result;
-use crate::types::TaskError;
 
 #[derive(Debug)]
 pub struct RedisClientConfig {

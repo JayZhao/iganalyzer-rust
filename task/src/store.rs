@@ -5,14 +5,13 @@ use bytes::Bytes;
 use chrono::naive::NaiveDateTime;
 use chrono::{DateTime, SecondsFormat, Utc};
 use tokio::sync::RwLock;
-use log::*;
 
 use crate::client::job::Job;
 use crate::redis_client::RedisClient;
+use crate::types::TaskError;
 use crate::util;
 use crate::working::Reservation;
 use crate::Result;
-use crate::types::TaskError;
 
 #[derive(Debug)]
 pub struct RedisQueue {
@@ -51,12 +50,7 @@ impl RedisQueue {
         Ok(0)
     }
 
-    pub async fn page<F>(
-        &self,
-        start: i64,
-        count: i64,
-        f: F,
-    ) -> Result<Option<i64>> {
+    pub async fn page<F>(&self, start: i64, count: i64) -> Result<Option<i64>> {
         if let Some(store) = self.store.upgrade() {
             let args = vec![self.name(), start.to_string(), (start + count).to_string()];
             let elems = store
@@ -66,9 +60,7 @@ impl RedisQueue {
                 .execute::<Vec<Vec<u8>>, String>("LRANGE", Some(&args))
                 .await?;
 
-            for elem in elems.iter() {
-                println!("{:?}", elems);
-            }
+            for _elem in elems.iter() {}
         }
 
         Ok(None)
@@ -364,14 +356,9 @@ impl RedisSorted {
         Ok(())
     }
 
-    pub async fn page(
-        &self,
-        start: i32,
-        count: i32,
-    ) -> Result<Option<(i32, Vec<SetEntry>)>>
-    {
+    pub async fn page(&self, start: i32, count: i32) -> Result<Option<(i32, Vec<SetEntry>)>> {
         let mut entries = vec![];
-        
+
         if let Some(store) = self.store.upgrade() {
             let args = vec![
                 self.name(),
@@ -404,9 +391,7 @@ impl RedisSorted {
 
                 if let Some(job) = job {
                     if let Some(score) = score {
-                        entries.push(
-                            SetEntry::new(Bytes::copy_from_slice(job.as_bytes()), score),
-                        );
+                        entries.push(SetEntry::new(Bytes::copy_from_slice(job.as_bytes()), score));
                     } else {
                         break;
                     }
@@ -426,8 +411,7 @@ impl RedisSorted {
         Ok(None)
     }
 
-    pub async fn each(&self) -> Result<Option<(i32, Vec<SetEntry>)>>
-    {
+    pub async fn each(&self) -> Result<Option<(i32, Vec<SetEntry>)>> {
         let count = 50;
         let mut current = 0;
         let mut res = vec![];
@@ -498,7 +482,7 @@ impl RedisSorted {
 
     pub async fn remove(&self, key: &str) -> Result<bool> {
         if let Ok((timestamp, jid)) = RedisSorted::decompose(key) {
-            if let Some(store) = self.store.upgrade() {
+            if let Some(_store) = self.store.upgrade() {
                 return self.rem(timestamp, jid).await;
             }
         }
@@ -507,7 +491,7 @@ impl RedisSorted {
     }
 
     pub async fn remove_elem(&self, timestamp: &str, jid: &str) -> Result<bool> {
-        if let Some(store) = self.store.upgrade() {
+        if let Some(_store) = self.store.upgrade() {
             let time = util::parse_time(timestamp);
             let time_f = time.timestamp_nanos() as f64 / 1000000000.0;
             return self.rem(time_f, jid.into()).await;
@@ -706,13 +690,12 @@ impl RedisStore {
     pub async fn fetch_queue_then<F, U>(&self, name: &str, f: F)
     where
         F: FnOnce(RedisQueue) -> U + Send + 'static,
-        U: std::future::Future<Output=RedisQueue> + Send + 'static,
+        U: std::future::Future<Output = RedisQueue> + Send + 'static,
     {
         let mut inner = self.inner.write().await;
         if let Some(queue) = inner.queue_set.remove(name) {
             let queue = f(queue).await;
             inner.queue_set.insert(name.into(), queue);
-            
         } else {
             drop(inner);
             let queue = RedisQueue::new(name.into(), Arc::downgrade(&self.inner));
@@ -732,7 +715,18 @@ impl RedisStore {
 
         Ok(false)
     }
-    
+
+    pub async fn brpop(&self, queues: Vec<&str>) -> Result<Option<Vec<String>>> {
+        let client = &self.inner.read().await.client;
+        let args = [queues, vec!["2"]].concat();
+
+        let r = client
+            .execute::<Option<Vec<String>>, &str>("BRPOP", Some(&args))
+            .await?;
+
+        Ok(r)
+    }
+
     pub async fn init_queue(&mut self) {
         let store = &mut *self.inner.write().await;
         store.scheduled = Some(RedisSorted {

@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::str::Utf8Error;
 
 use crate::command::COMMAND_SET;
- 
+
 #[derive(Debug)]
 pub enum Error {
     Incomplete,
@@ -17,18 +17,16 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn to_cmd(&self) -> Result<Vec<&str>, Error>{
+    pub fn to_cmd(&self) -> Result<Vec<&str>, Error> {
         let cmd = self.to_string()?.split(' ').collect::<Vec<&str>>();
-
 
         if COMMAND_SET.contains(&cmd[0]) {
             return Ok(cmd);
         }
 
         Err(Error::InvalidCmd(cmd.join(" ")))
-
     }
-    
+
     pub fn check(src: &mut Cursor<&[u8]>) -> Result<(), Error> {
         if src.get_ref().len() == 0 {
             return Err(Error::Incomplete);

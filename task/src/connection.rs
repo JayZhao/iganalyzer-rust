@@ -1,16 +1,16 @@
-use std::sync::Arc;
 use crate::frame::Frame;
 use crate::server::{ClientData, Workers};
 use bytes::{Buf, BytesMut};
-use chrono::{DateTime, Utc};
-use std::net::Shutdown;
 use log::*;
 use std::io::Cursor;
+use std::net::Shutdown;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
-use tokio::time::{self, Duration};
 use tokio::sync::RwLock;
+use tokio::time::{self, Duration};
 
 use crate::types::TaskError;
 
@@ -19,21 +19,27 @@ pub struct Connection {
     stream: BufWriter<TcpStream>,
     buffer: BytesMut,
     workers: Arc<RwLock<Workers>>,
-    pub wid: Option<String>
+    addr: SocketAddr,
+    pub wid: Option<String>,
 }
 
 impl Connection {
     pub fn new(socket: TcpStream, workers: Arc<RwLock<Workers>>) -> Connection {
         Connection {
+            addr: socket.peer_addr().unwrap(),
             stream: BufWriter::new(socket),
             buffer: BytesMut::with_capacity(4 * 1024),
             workers,
-            wid: None
+            wid: None,
         }
     }
 
     pub fn set_wid(&mut self, wid: Option<String>) {
         self.wid = wid;
+    }
+
+    pub fn get_wid(&mut self) -> Option<String> {
+        self.wid.clone()
     }
 
     pub fn close(&self) -> io::Result<()> {
@@ -59,7 +65,9 @@ impl Connection {
                 if self.buffer.is_empty() {
                     return Ok(None);
                 } else {
-                    return Err(Box::new(TaskError::IoError("connection reset by peer".into())));
+                    return Err(Box::new(TaskError::IoError(
+                        "connection reset by peer".into(),
+                    )));
                 }
             }
         }
@@ -117,6 +125,13 @@ impl Connection {
         Ok(())
     }
 
+    pub(crate) async fn send_ok(&mut self) -> crate::Result<()> {
+        self.stream.write_all("OK\r\n".as_bytes()).await?;
+        self.stream.flush().await?;
+
+        Ok(())
+    }
+
     pub(crate) async fn send_err(&mut self, err: crate::Error) -> crate::Result<()> {
         self.stream
             .write_all(format!("-ERR {:?}\r\n", err.to_string()).as_bytes())
@@ -128,9 +143,7 @@ impl Connection {
 
     pub(crate) async fn send_msg(&mut self, msg: &str) -> crate::Result<()> {
         if msg == "" {
-            self.stream
-                .write_all(format!("{}\r\n", msg).as_bytes())
-                .await?;
+            self.stream.write_all("$-1\r\n".as_bytes()).await?;
         } else {
             self.stream
                 .write_all(format!("${}\r\n", msg.len()).as_bytes())
@@ -155,14 +168,18 @@ impl Connection {
                             Ok(data) => data,
                             Err(e) => {
                                 error!("{:?}", e);
-                                return Err(Box::new(TaskError::IoError("Handshake failed, invalid client data".into())));
+                                return Err(Box::new(TaskError::IoError(
+                                    "Handshake failed, invalid client data".into(),
+                                )));
                             }
                         };
                         self.say_ok().await?;
 
                         return Ok(data);
                     } else {
-                        return Err(Box::new(TaskError::IoError("Handshake failed, invalid client data".into())));
+                        return Err(Box::new(TaskError::IoError(
+                            "Handshake failed, invalid client data".into(),
+                        )));
                     }
                 } else {
                     return Err(Box::new(TaskError::IoError("Handshake failed".into())));

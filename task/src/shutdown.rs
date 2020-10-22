@@ -1,18 +1,20 @@
 use log::*;
+use std::net::SocketAddr;
 use tokio::sync::broadcast;
 
 #[derive(Debug)]
 pub struct Shutdown {
     shutdown: bool,
-
-    notify: broadcast::Receiver<()>,
+    notify: broadcast::Receiver<String>,
+    wid: Option<String>,
 }
 
 impl Shutdown {
-    pub fn new(notify: broadcast::Receiver<()>) -> Shutdown {
+    pub fn new(notify: broadcast::Receiver<String>, wid: Option<String>) -> Shutdown {
         Shutdown {
             shutdown: false,
             notify,
+            wid,
         }
     }
 
@@ -25,8 +27,20 @@ impl Shutdown {
             return;
         }
 
-        let _ = self.notify.recv().await;
-
-        self.shutdown = true;
+        if let Some(wid) = &self.wid {
+            match self.notify.recv().await {
+                Ok(ref saddr) => {
+                    if saddr == wid {
+                        self.shutdown = true;
+                    }
+                }
+                Err(e) => {
+                    error!("Shutdown failed {:?}", e);
+                }
+            }
+        } else {
+            let _ = self.notify.recv().await;
+            self.shutdown = true;
+        }
     }
 }

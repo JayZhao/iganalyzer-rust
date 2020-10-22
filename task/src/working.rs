@@ -1,9 +1,9 @@
-use chrono::{DateTime, Utc};
-use bytes::Bytes;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use crate::client::job::Job;
 use crate::Result;
+use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 #[async_trait]
 trait Lease {
@@ -15,7 +15,7 @@ trait Lease {
 struct SimpleLease {
     payload: Bytes,
     job: Job,
-    released: bool
+    released: bool,
 }
 
 #[async_trait]
@@ -34,7 +34,7 @@ pub struct Reservation {
     since: String,
     expiry: String,
     wid: String,
-    
+
     #[serde(skip)]
     tsince: Option<DateTime<Utc>>,
 
@@ -45,14 +45,13 @@ pub struct Reservation {
     extension: Option<DateTime<Utc>>,
 }
 
-
 impl Reservation {
     pub fn encode(&self) -> Result<Bytes> {
         Ok(Bytes::copy_from_slice(
             serde_json::to_string(self)?.as_bytes(),
         ))
     }
-    
+
     pub fn decode(buf: &[u8]) -> Result<Reservation> {
         Ok(serde_json::from_str(&String::from_utf8_lossy(buf))?)
     }
