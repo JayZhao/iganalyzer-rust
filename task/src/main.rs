@@ -30,10 +30,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     store.init_queue().await;
 
-    // let mut job = client::job::Job::new("test", Vec::new(), Vec::new());
-
-    // job.at = Some(util::utc_now());
-
     server::run(
         server::ServerOpts {
             bind_host: "0.0.0.0".into(),
@@ -42,23 +38,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         store,
     )
     .await?;
-    // if let Some(scheduled) = store.get_scheduled().await {
-    // scheduled.add(job.clone()).await?;
-
-    // let r = scheduled.get(&format!("{}|{}", &job.at.unwrap(), &job.jid)).await?;
-    // let r = scheduled.get(&r.unwrap().key()?).await?;
-
-    // scheduled.find("*", |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
-
-    // let a = scheduled.page(0, 2, |(index, job)| { println!("{:?} {:?}", index, job)}).await?;
-
-    // scheduled.rem(1600867599.0458748, "Wzl3rd75Lu5jv7Em".into()).await?;
-    //scheduled.remove_before("2020-09-24T02:37:36.656845+00:00", 1, |_, _| {}).await?;
-
-    //let a = scheduled.each(|(index, job)| { println!("{:?} {:?}", index, job)}).await?;
-    // println!("{:?}", a);
-
-    //}
 
     Ok(())
 }
