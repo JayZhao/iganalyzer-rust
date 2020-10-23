@@ -1,7 +1,9 @@
+use crate::client::job::Failure;
 use crate::client::job::Job;
 use crate::store::RedisSorted;
 use crate::store::RedisStore;
 use crate::types::TaskError;
+use crate::util;
 use crate::working::Reservation;
 use crate::Result;
 use chrono::{DateTime, Utc};
@@ -12,6 +14,19 @@ use std::collections::HashMap;
 pub struct Manager {
     store: RedisStore,
     working_map: HashMap<String, Reservation>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FailErrType {
+    ReservationExpired,
+}
+
+#[derive(Debug)]
+pub struct FailPayload {
+    jid: String,
+    err_msg: String,
+    err_type: FailErrType,
+    backtrace: Vec<String>,
 }
 
 impl Manager {
@@ -35,6 +50,137 @@ impl Manager {
                             error!("Failed loading {:?} job, {:?}", entry, e);
                         }
                     }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn reap_expired_jobs(&mut self, when: &str) -> Result<i64> {
+        let mut total = 0;
+        let mut ress = vec![];
+
+        loop {
+            if let Some(working) = self.store.get_working().await {
+                match working
+                    .remove_before(when, 10, |item, _score| {
+                        match Reservation::decode(item.as_bytes()) {
+                            Ok(res) => {
+                                ress.push(res);
+                            }
+                            Err(e) => {
+                                error!("invalid reservation {:?} {:?}", item, e);
+                            }
+                        }
+                    })
+                    .await
+                {
+                    Ok(Some(counter)) => {
+                        if counter < 10 {
+                            break;
+                        }
+                    }
+                    Ok(None) => debug!("no expired jobs"),
+                    Err(e) => {
+                        error!("reap expired jobs failed, {:?}", e);
+                    }
+                }
+            }
+        }
+
+        for res in ress {
+            let job = &res.job;
+            let jid = &job.jid;
+
+            if let Some(local_res) = self.working_map.get_mut(jid) {
+                if let Some(extension) = local_res.extension {
+                    if util::parse_time(when) < extension {
+                        local_res.texpiry = Some(extension);
+                        local_res.expiry = util::format_time(extension);
+
+                        info!(
+                            "Auto-extending reservation time for {:?} to {:?}",
+                            jid, local_res.expiry
+                        );
+                        if let Some(working) = self.store.get_working().await {
+                            let r = Reservation::encode(local_res).unwrap();
+                            if let Err(e) = working.add_elem(&local_res.expiry, r).await {
+                                error!("Push reservation job failed {:?}", e);
+                            }
+
+                            continue;
+                        }
+                    }
+                }
+
+                let job = res.job;
+
+                self.process_failure(
+                    &job.jid,
+                    FailPayload {
+                        jid: job.jid.clone(),
+                        err_msg: "reservation expired".into(),
+                        err_type: FailErrType::ReservationExpired,
+                        backtrace: vec![],
+                    },
+                )
+                .await?;
+
+                total += 1;
+            }
+        }
+
+        Ok(total)
+    }
+
+    pub async fn clear_reservation(&mut self, jid: &str) -> Result<Reservation> {
+        let res = self.working_map.remove(jid);
+
+        if let None = res {
+            error!("Job not found, {:?}", res);
+
+            return Err(Box::new(TaskError::JobErr("Job not found".into())));
+        }
+
+        Ok(res.unwrap())
+    }
+
+    pub async fn process_failure(&mut self, jid: &str, fail_payload: FailPayload) -> Result<()> {
+        let res = self.clear_reservation(jid).await?;
+
+        if fail_payload.err_type != FailErrType::ReservationExpired {
+            if let Some(working) = self.store.get_working().await {
+                working.remove_elem(&res.expiry, jid).await?;
+            }
+        }
+
+        self.store.fail().await?;
+
+        let mut job = res.job;
+
+        if let Some(mut failure) = job.failure.as_mut() {
+            failure.retry_count += 1;
+            failure.err_msg = fail_payload.err_msg;
+            failure.err_type = format!("{:?}", fail_payload.err_type);
+            failure.backtrace = fail_payload.backtrace;
+        } else {
+            job.failure = Some(Failure {
+                retry_count: 0,
+                failed_at: util::utc_now(),
+                next_at: "".into(),
+                err_msg: fail_payload.err_msg,
+                err_type: format!("{:?}", fail_payload.err_type),
+                backtrace: fail_payload.backtrace,
+            });
+        }
+
+        if let Some(count) = &job.retry {
+            if let Some(failure) = &job.failure {
+                if *count > 0 && failure.retry_count < *count {
+                    self.store.retry_later(job).await?;
+                } else {
+                    self.store.send_to_morgue(job).await?;
                 }
             }
         }

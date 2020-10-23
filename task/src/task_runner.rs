@@ -117,11 +117,10 @@ where
 
         for task in &mut self.tasks {
             let every = task.every.load(Ordering::Relaxed);
+
             if sec % every != 0 {
                 continue;
             }
-
-            info!("{:?} {:?}", sec, every);
 
             let tstart = Utc::now();
 
@@ -130,7 +129,6 @@ where
             }
 
             let tend = Utc::now();
-
             let td = (tend - tstart).num_nanoseconds().unwrap();
 
             task.runs.fetch_add(1, Ordering::SeqCst);
@@ -194,21 +192,21 @@ impl Scanner {
         match self.category {
             ScannerCategory::Scheduled => {
                 let manager = self.manager.read().await;
-                info!("Scheduled");
+                debug!("Scheduled");
                 manager.schedule(&stime).await;
             }
             ScannerCategory::Retry => {
                 let manager = self.manager.read().await;
-                info!("Retry");
+                debug!("Retry");
                 manager.retry(&stime).await;
             }
             ScannerCategory::Dead => {
                 let manager = self.manager.read().await;
-                info!("Dead");
+                debug!("Dead");
                 manager.purge(&stime).await;
             }
             ScannerCategory::ReapConn => {
-                info!("Reap");
+                debug!("Reap");
                 let mut workers = self.workers.write().await;
                 let wids = workers.reap_heartbeats().await;
 

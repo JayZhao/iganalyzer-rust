@@ -36,7 +36,7 @@ async fn flush(store: &RedisStore) -> Result<()> {
 }
 
 async fn push(manager: Arc<RwLock<Manager>>, conn: &mut Connection, cmd: &str) -> Result<()> {
-    info!("pushing............");
+    debug!("pushing............");
     match job::Job::decode(cmd.as_ref()) {
         Ok(mut job) => {
             info!("{:?}", job);
@@ -96,14 +96,15 @@ async fn fail() -> Result<()> {
     Ok(())
 }
 
-async fn heartbeat(workers: Arc<RwLock<Workers>>, _conn: &mut Connection, cmd: &str) -> Result<()> {
+async fn heartbeat(workers: Arc<RwLock<Workers>>, conn: &mut Connection, cmd: &str) -> Result<()> {
     match ClientBeat::decode(cmd.as_ref()) {
         Ok(beat) => {
             let mut workers = workers.write().await;
             workers.heartbeats(beat).await;
+            conn.send_ok().await?;
         }
         Err(e) => {
-            error!("{:?}", e);
+            conn.send_err(e).await?;
         }
     };
 
@@ -113,12 +114,13 @@ async fn heartbeat(workers: Arc<RwLock<Workers>>, _conn: &mut Connection, cmd: &
 async fn info(server_context: Arc<RwLock<ServerContext>>, conn: &mut Connection) -> Result<()> {
     let mut state: HashMap<String, String> = HashMap::new();
     let context = server_context.read().await;
+
     state.insert("connection".into(), format!("{}", context.connections));
     state.insert("server_utc_time".into(), format!("{}", Utc::now()));
     state.insert("uptime".into(), format!("{}", context.uptime()));
     state.insert("commands".into(), format!("{}", context.cmds));
     let msg = serde_json::to_string(&state)?;
-    info!("msg {:?}", msg);
+
     conn.send_msg(&msg).await?;
     Ok(())
 }

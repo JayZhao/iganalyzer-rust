@@ -12,7 +12,7 @@ trait Lease {
 }
 
 #[derive(Debug)]
-struct SimpleLease {
+pub struct SimpleLease {
     payload: Bytes,
     job: Job,
     released: bool,
@@ -31,18 +31,21 @@ impl Lease for SimpleLease {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Reservation {
     pub job: Job,
-    since: String,
-    expiry: String,
-    wid: String,
+    pub since: String,
+    pub expiry: String,
+    pub wid: String,
 
     #[serde(skip)]
-    tsince: Option<DateTime<Utc>>,
+    pub tsince: Option<DateTime<Utc>>,
 
     #[serde(skip)]
-    texpiry: Option<DateTime<Utc>>,
+    pub texpiry: Option<DateTime<Utc>>,
 
     #[serde(skip)]
-    extension: Option<DateTime<Utc>>,
+    pub extension: Option<DateTime<Utc>>,
+
+    #[serde(skip)]
+    pub lease: Option<SimpleLease>,
 }
 
 impl Reservation {

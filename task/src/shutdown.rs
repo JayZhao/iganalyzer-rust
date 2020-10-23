@@ -1,5 +1,4 @@
 use log::*;
-use std::net::SocketAddr;
 use tokio::sync::broadcast;
 
 #[derive(Debug)]
@@ -22,9 +21,9 @@ impl Shutdown {
         self.shutdown
     }
 
-    pub async fn recv(&mut self) {
+    pub async fn recv(&mut self) -> bool {
         if self.shutdown {
-            return;
+            return true;
         }
 
         if let Some(wid) = &self.wid {
@@ -42,5 +41,7 @@ impl Shutdown {
             let _ = self.notify.recv().await;
             self.shutdown = true;
         }
+
+        self.shutdown
     }
 }

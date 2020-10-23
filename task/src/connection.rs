@@ -116,6 +116,7 @@ impl Connection {
         Ok(())
     }
 
+    /*
     pub(crate) async fn send_int(&mut self, val: i64) -> crate::Result<()> {
         self.stream
             .write_all(format!(":{}\r\n", val).as_bytes())
@@ -124,6 +125,7 @@ impl Connection {
 
         Ok(())
     }
+    */
 
     pub(crate) async fn send_ok(&mut self) -> crate::Result<()> {
         self.stream.write_all("OK\r\n".as_bytes()).await?;

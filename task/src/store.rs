@@ -3,7 +3,7 @@ use std::sync::{Arc, Weak};
 
 use bytes::Bytes;
 use chrono::naive::NaiveDateTime;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use tokio::sync::RwLock;
 
 use crate::client::job::Job;
@@ -532,8 +532,8 @@ impl RedisSorted {
             let size = elems.len() as i32;
             let mut counter = 0;
             loop {
-                let job = if let Some(job_item) = iter.next() {
-                    Some(job_item)
+                let item = if let Some(item) = iter.next() {
+                    Some(item)
                 } else {
                     None
                 };
@@ -544,16 +544,16 @@ impl RedisSorted {
                     None
                 };
 
-                if let Some(job) = job {
+                if let Some(item) = item {
                     if let Some(score) = score {
-                        let args = vec![self.name(), job.into()];
+                        let args = vec![self.name(), item.into()];
                         store
                             .read()
                             .await
                             .client
                             .execute::<i32, String>("ZREM", Some(&args))
                             .await?;
-                        f(job.into(), score);
+                        f(item.into(), score);
                     } else {
                         break;
                     }
@@ -561,7 +561,7 @@ impl RedisSorted {
                     break;
                 }
 
-                counter = counter + 1;
+                counter += 1;
                 if counter >= size {
                     break;
                 }
@@ -669,6 +669,68 @@ impl RedisStore {
 
         store.init_queue().await;
         store
+    }
+
+    pub async fn success(&self) -> Result<()> {
+        let client = &self.inner.read().await.client;
+        let args = vec!["processed"];
+
+        client.execute::<i32, &str>("INCR", Some(&args)).await?;
+
+        Ok(())
+    }
+
+    pub async fn total_success(&self) -> Result<i32> {
+        let client = &self.inner.read().await.client;
+
+        let args = vec!["processed", "0"];
+
+        let r = client.execute::<i32, &str>("INCRBY", Some(&args)).await?;
+
+        Ok(r)
+    }
+
+    pub async fn fail(&self) -> Result<()> {
+        let client = &self.inner.read().await.client;
+        let args = vec!["failures"];
+
+        client.execute::<i32, &str>("INCR", Some(&args)).await?;
+
+        Ok(())
+    }
+
+    pub async fn total_failures(&self) -> Result<i32> {
+        let client = &self.inner.read().await.client;
+        let args = vec!["failures", "0"];
+
+        let r = client.execute::<i32, &str>("INCRBY", Some(&args)).await?;
+
+        Ok(r)
+    }
+
+    pub async fn retry_later(&mut self, mut job: Job) -> Result<()> {
+        if let Some(when) = job.next_try() {
+            if let Some(failure) = &mut job.failure {
+                let time = util::format_time(when);
+                failure.next_at = time.clone();
+                let payload = Job::encode(&job)?;
+                if let Some(retries) = self.get_retries().await {
+                    retries.add_elem(&time, payload).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn send_to_morgue(&self, job: Job) -> Result<()> {
+        let time = util::format_time(Utc::now() + Duration::hours(24 * 180));
+
+        let payload = Job::encode(&job)?;
+        if let Some(dead) = self.get_dead().await {
+            dead.add_elem(&time, payload).await?;
+        }
+
+        Ok(())
     }
 
     pub async fn get_scheduled(&self) -> Option<RedisSorted> {

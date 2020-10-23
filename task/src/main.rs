@@ -1,6 +1,5 @@
 #![feature(str_split_once)]
 use crate::types::TaskError;
-use tokio::signal;
 pub type Error = Box<TaskError>;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -41,7 +40,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             bind_port: 9000,
         },
         store,
-        signal::ctrl_c(),
     )
     .await?;
     // if let Some(scheduled) = store.get_scheduled().await {

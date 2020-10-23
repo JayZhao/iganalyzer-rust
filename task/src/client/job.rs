@@ -1,22 +1,23 @@
 use base64;
 use bytes::Bytes;
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
+use rand::random;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_json::error::Error;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Failure {
-    retry_count: i32,
-    failed_at: String,
+    pub retry_count: i32,
+    pub failed_at: String,
     #[serde(skip)]
-    next_at: String,
+    pub next_at: String,
     #[serde(skip)]
-    err_msg: String,
+    pub err_msg: String,
     #[serde(skip)]
-    err_type: String,
+    pub err_type: String,
     #[serde(skip)]
-    backtrace: Vec<String>,
+    pub backtrace: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -38,15 +39,15 @@ pub struct Job {
     #[serde(skip)]
     pub retry: Option<i32>,
     #[serde(skip)]
-    backtrace: Option<i32>,
+    pub backtrace: Option<i32>,
     #[serde(skip)]
-    failure: Option<Failure>,
+    pub failure: Option<Failure>,
     #[serde(skip)]
-    expired_at: Option<i32>,
+    pub expired_at: Option<i32>,
     #[serde(skip)]
-    unique_for: Option<i32>,
+    pub unique_for: Option<i32>,
     #[serde(skip)]
-    unique_until: Option<i32>,
+    pub unique_until: Option<i32>,
 }
 
 impl Default for Job {
@@ -90,6 +91,18 @@ impl Job {
         let buf = rng.gen::<[u8; 12]>();
 
         base64::encode(&buf)
+    }
+
+    pub fn next_try(&self) -> Option<DateTime<Utc>> {
+        if let Some(failure) = &self.failure {
+            let count = failure.retry_count as i64;
+            let rand = random::<i64>() % 30;
+            let sec = (count * count * count * count) + 15 + rand * (count + 1);
+
+            return Some(Utc::now() + Duration::seconds(sec));
+        }
+
+        None
     }
 
     pub fn encode(&self) -> Result<Bytes, Error> {

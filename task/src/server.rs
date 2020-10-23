@@ -4,9 +4,10 @@ use log::*;
 use serde::{Deserialize, Serialize};
 use serde_json::error::Error;
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::signal;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::RwLock;
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
@@ -183,6 +184,7 @@ impl Workers {
                 if let Some(old_state) = &cl.state {
                     debug!("{:?} {:?}", new_state, old_state);
 
+                    cl.last_heartbeat = Some(Utc::now().timestamp());
                     if new_state != *old_state {
                         cl.signal(new_state);
                     }
@@ -193,6 +195,7 @@ impl Workers {
 
     pub async fn remove_connection(&mut self, conn: &Connection) {
         if let Some(ref wid) = conn.wid {
+            info!("Deleting wid {:?}", wid);
             self.heartbeats.remove(wid);
         }
     }
@@ -202,7 +205,10 @@ impl Workers {
         let time = (Utc::now() - chrono::Duration::minutes(1)).timestamp();
         for (wid, hb) in &self.heartbeats {
             if let Some(last_heartbeats) = hb.last_heartbeat {
-                debug!("wid: {:?}, hearbeats: {:?},  time: {:?}", wid, last_heartbeats, time);
+                debug!(
+                    "wid: {:?}, hearbeats: {:?},  time: {:?}",
+                    wid, last_heartbeats, time
+                );
                 if last_heartbeats < time {
                     wids.push(wid.to_string());
                 }
@@ -219,7 +225,7 @@ impl Workers {
 
 const MAX_CONNECTIONS: usize = 2000;
 
-pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> crate::Result<()> {
+pub async fn run(opts: ServerOpts, store: RedisStore) -> crate::Result<()> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (notify_reap, _) = broadcast::channel(MAX_CONNECTIONS);
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
@@ -296,13 +302,18 @@ pub async fn run(opts: ServerOpts, store: RedisStore, shutdown: impl Future) -> 
         shutdown_complete_rx,
     };
 
+    let mut sig = signal(SignalKind::terminate())?;
+
     tokio::select! {
         res = server.run() => {
             if let Err(err) = res {
                 error!("failed to accept by {:?}", err);
             }
         }
-        _ = shutdown => {
+        _ = signal::ctrl_c() => {
+            info!("shutting down");
+        }
+        _ = sig.recv() => {
             info!("shutting down");
         }
     }
@@ -369,7 +380,7 @@ impl Server {
             let socket = self.accept().await?;
             let mut conn = Connection::new(socket, Arc::clone(&self.workers));
 
-            info!("Recv conn {:?}", conn);
+            debug!("Recv conn {:?}", conn);
             match conn.handshake().await {
                 Ok(client_data) => {
                     conn.set_wid(client_data.wid.clone());
@@ -384,7 +395,7 @@ impl Server {
             };
 
             let wid = conn.get_wid();
-            
+
             let mut handler = Handler {
                 store: self.store.clone(),
                 connection: conn,
@@ -400,6 +411,8 @@ impl Server {
             tokio::spawn(async move {
                 if let Err(err) = handler.run().await {
                     error!("{:?}", err);
+                    let mut workers = handler.workers.write().await;
+                    workers.remove_connection(&handler.connection).await;
                 }
 
                 let mut context = handler.server_context.write().await;
@@ -440,16 +453,25 @@ impl Handler {
                             frame
                         },
                         None => {
+                            let mut workers = self.workers.write().await;
+                            workers.remove_connection(&self.connection).await;
                             return Ok(());
                         }
                     }
                 },
-                _ = self.reap_shutdown.recv() => {
+                result = self.reap_shutdown.recv() => {
                     debug!("Connection recv reap signal!");
+
+                    if result {
+                        let mut workers = self.workers.write().await;
+                        workers.remove_connection(&self.connection).await;
+                    }
                     continue;
                 },
                 _ = self.shutdown.recv() => {
                     debug!("Connection recv shutdown signal!");
+                    let mut workers = self.workers.write().await;
+                    workers.remove_connection(&self.connection).await;
                     return Ok(());
                 }
             };
